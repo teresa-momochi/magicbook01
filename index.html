@@ -1569,21 +1569,98 @@ function setConvertStatus(msg) {
 // 真正的文字辨識（OCR）改成「翻到哪一頁，才對那一頁執行」，
 // 對應 PRD 流程：每翻到一頁 → OCR 擷取該頁文字 → 切成多個 Block → 出現在編輯區。
 // ============================================================
+/**
+ * 把 PDF.js 抽出的文字項目，依 Y 座標分組成「行」，再依間距分組成「段落」。
+ * 這是教材轉換流程裡「取得文字」這一步，對「PDF（文字版）」這種 Source
+ * 的具體實作 —— 跟 OCR、Word 解析等是平行的、可替換的取得文字方式。
+ */
+function groupPdfTextItemsIntoBlocks(textItems, viewportHeight) {
+  if (textItems.length === 0) return [];
+  const items = textItems.map((item) => ({
+    text: item.str,
+    x: item.transform[4],
+    y: viewportHeight - item.transform[5],
+    fontSize: Math.hypot(item.transform[2], item.transform[3]),
+  }));
+  items.sort((a, b) => a.y - b.y || a.x - b.x);
+
+  const lines = [];
+  let currentLine = null;
+  const LINE_Y_TOLERANCE = 4;
+  for (const item of items) {
+    if (!item.text.trim()) continue;
+    if (currentLine && Math.abs(item.y - currentLine.y) <= LINE_Y_TOLERANCE) {
+      currentLine.text += item.text;
+      currentLine.x = Math.min(currentLine.x, item.x);
+    } else {
+      currentLine = { text: item.text, x: item.x, y: item.y, fontSize: item.fontSize };
+      lines.push(currentLine);
+    }
+  }
+
+  const blocks = [];
+  let currentBlock = null;
+  let prevY = null;
+  const PARAGRAPH_GAP_THRESHOLD = 30;
+  for (const line of lines) {
+    const text = line.text.trim();
+    if (!text) continue;
+    const isNewBlock = prevY === null || line.y - prevY > PARAGRAPH_GAP_THRESHOLD;
+    if (isNewBlock) {
+      currentBlock = { text, maxFontSize: line.fontSize };
+      blocks.push(currentBlock);
+    } else {
+      currentBlock.text += ' ' + text;
+      currentBlock.maxFontSize = Math.max(currentBlock.maxFontSize, line.fontSize);
+    }
+    prevY = line.y;
+  }
+  return blocks;
+}
+
+/**
+ * 嘗試直接從 PDF 頁面抽取文字。回傳 null 代表這一頁沒有可抽取的文字層
+ * （例如掃描／圖片型 PDF），呼叫端應該改用 AI 辨識或手動輸入。
+ */
+async function tryExtractPdfPageText(pdf, pageNumber) {
+  const page = await pdf.getPage(pageNumber);
+  const viewport = page.getViewport({ scale: 1 });
+  const textContent = await page.getTextContent();
+  const rawBlocks = groupPdfTextItemsIntoBlocks(textContent.items, viewport.height);
+
+  if (rawBlocks.length === 0) return null;
+
+  return rawBlocks.map((b, idx) => ({
+    id: `p${pageNumber}-b${idx + 1}`,
+    type: b.maxFontSize >= 20 ? 'heading' : 'text',
+    text: b.text,
+  }));
+}
+
 async function convertMaterial(pdfData) {
   setConvertStatus('讀取教材檔案...');
   const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
   state.pdfDoc = pdf;
   logConvert(`共 ${pdf.numPages} 頁`);
 
-  // 每一頁先建立空的頁面資料結構，blocks 留空，翻到該頁時才執行 OCR 填入。
-  // originalPdfPage 記錄這一頁對應到原始 PDF 的哪一頁 —— 教材頁碼（pageNumber）
-  // 之後可能因為「刪除本頁」而重新排序，但 originalPdfPage 讓系統永遠知道
-  // 該去 PDF 的哪一頁渲染畫面、跑 OCR，兩者是分開的兩個編號系統。
-  state.pages = Array.from({ length: pdf.numPages }, (_, idx) => ({
-    pageNumber: idx + 1,
-    originalPdfPage: idx + 1,
-    blocks: null, // null 代表尚未執行 OCR
-  }));
+  // 對每一頁先嘗試直接抽取文字（PDF 文字版的情況）。
+  // 抽得到文字：直接使用，老師進編輯模式看到的就是現成內容，不需要選擇建立方式。
+  // 抽不到文字（掃描／圖片型 PDF）：blocks 設為 null，老師翻到該頁時
+  // 才看到「AI 辨識／自己輸入／貼上文字」的選擇畫面 —— 跟之前的設計一致，
+  // 只是現在真正執行了文字抽取這個判斷步驟，而不是一律當作沒有文字。
+  setConvertStatus('嘗試直接讀取文字...');
+  state.pages = [];
+  for (let idx = 0; idx < pdf.numPages; idx++) {
+    const pageNumber = idx + 1;
+    const extractedBlocks = await tryExtractPdfPageText(pdf, pageNumber);
+    state.pages.push({
+      pageNumber,
+      originalPdfPage: pageNumber,
+      blocks: extractedBlocks, // 有文字就是陣列，沒有文字維持 null
+    });
+  }
+  const pagesWithText = state.pages.filter(p => p.blocks !== null).length;
+  logConvert(`✓ ${pagesWithText} / ${pdf.numPages} 頁成功直接讀到文字`);
 
   setConvertStatus('準備完成，進入編輯模式...');
   await new Promise(r => setTimeout(r, 300));
