@@ -2262,7 +2262,15 @@ async function renderEditPage(pageNum) {
   state.currentEditPage = pageNum;
   const pageData = state.pages.find(p => p.pageNumber === pageNum);
 
-  await renderSourceViewer(pageData);
+  try {
+    await renderSourceViewer(pageData);
+  } catch (err) {
+    // 左側來源渲染失敗，不該連帶讓右側的 Block 編輯功能整個無法使用 ——
+    // 印出錯誤方便排查，但繼續往下執行，至少保住右側的編輯能力。
+    console.error('左側來源渲染失敗（不影響右側編輯）：', err);
+    const pdfPane = document.querySelector('#screen-edit .pdf-pane');
+    if (pdfPane) pdfPane.style.display = 'none';
+  }
 
   document.getElementById('editPageIndicator').textContent = `第 ${pageNum} / ${state.pages.length} 頁`;
   document.getElementById('editPrevBtn').disabled = pageNum <= 1;
@@ -2879,7 +2887,13 @@ async function renderReadPage(pageNum) {
   state.currentReadPage = pageNum;
   const pageData = state.pages.find(p => p.pageNumber === pageNum);
 
-  await renderReadSourceViewer(pageData);
+  try {
+    await renderReadSourceViewer(pageData);
+  } catch (err) {
+    console.error('左側來源渲染失敗（不影響右側閱讀）：', err);
+    const pdfPane = document.querySelector('#screen-read .pdf-pane');
+    if (pdfPane) pdfPane.style.display = 'none';
+  }
 
   document.getElementById('readBlocks').innerHTML = blocksToReadHtml(pageData.blocks);
 
