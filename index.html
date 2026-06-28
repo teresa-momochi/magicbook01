@@ -975,14 +975,25 @@ class SupabaseRepository extends BookRepository {
   async saveBook(book) {
     const userId = await this._getUserId();
 
+    // id 是可選的：
+    //   - 第一次建立教材時，不傳 id，讓資料庫用 default gen_random_uuid() 自動生成，
+    //     呼叫端應該用這次回傳的 data.id 設定 state.currentBookId，
+    //     不應該自己在前端產生任何形式的 id（例如 `book-${Date.now()}`），
+    //     因為 books.id 是 uuid 型欄位，自訂字串會被資料庫直接拒絕。
+    //   - 更新既有教材（例如重新命名、或老師翻頁存檔時）需要傳 id，
+    //     upsert 才知道要更新哪一筆，而不是又建一筆新的。
+    const payload = {
+      user_id: userId,
+      title: book.title,
+      cover: book.cover ?? null,
+    };
+    if (book.id) {
+      payload.id = book.id;
+    }
+
     const { data, error } = await this.client
       .from('books')
-      .upsert({
-        id: book.id,
-        user_id: userId,
-        title: book.title,
-        cover: book.cover ?? null,
-      })
+      .upsert(payload)
       .select()
       .single();
 
@@ -1437,11 +1448,14 @@ async function acquireTextForSource(source, fileOrUrl) {
  */
 async function createBookFromBlocks(title, blocks) {
   state.materialName = title;
-  state.currentBookId = `book-${Date.now()}`;
   state.pdfDoc = null;
   state.pages = [{ pageNumber: 1, blocks }];
 
-  await bookRepository.saveBook({ id: state.currentBookId, title: state.materialName });
+  // 不自行產生 id —— books.id 是 uuid 型欄位，交給資料庫的
+  // default gen_random_uuid() 生成，這裡用回傳結果設定 currentBookId。
+  const savedBook = await bookRepository.saveBook({ title: state.materialName });
+  state.currentBookId = savedBook.id;
+
   await bookRepository.savePage(state.currentBookId, 1, blocks);
 
   renderStepper(2);
@@ -1523,7 +1537,6 @@ uploadZone.addEventListener('drop', (e) => {
 
 addMaterialBtn.addEventListener('click', async () => {
   state.materialName = materialNameInput.value || '未命名教材';
-  state.currentBookId = `book-${Date.now()}`; // 新教材的識別碼，存檔時會用到
   renderStepper(1);
   showScreen('screen-converting');
   try {
@@ -1575,11 +1588,11 @@ async function convertMaterial(pdfData) {
   setConvertStatus('準備完成，進入編輯模式...');
   await new Promise(r => setTimeout(r, 300));
 
-  // 先在 Repository 建立這本書的記錄，後續每一頁的儲存才有對象可以存進去
-  await bookRepository.saveBook({
-    id: state.currentBookId,
-    title: state.materialName,
-  });
+  // 先在 Repository 建立這本書的記錄，後續每一頁的儲存才有對象可以存進去。
+  // 不自行產生 id —— books.id 是 uuid 型欄位，交給資料庫的
+  // default gen_random_uuid() 生成，這裡用回傳結果設定 currentBookId。
+  const savedBook = await bookRepository.saveBook({ title: state.materialName });
+  state.currentBookId = savedBook.id;
 
   renderStepper(2);
   state.currentEditPage = 1;
