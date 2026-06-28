@@ -1902,15 +1902,26 @@ async function tryExtractPdfPageText(pdf, pageNumber) {
   const page = await pdf.getPage(pageNumber);
   const viewport = page.getViewport({ scale: 1 });
   const textContent = await page.getTextContent();
+  console.log(`%c[診斷] 第${pageNumber}頁 textContent.items.length =`, 'color:teal', textContent.items.length);
+  if (textContent.items.length > 0) {
+    console.log(`%c[診斷] 第${pageNumber}頁 前3個items:`, 'color:teal', textContent.items.slice(0, 3).map(it => it.str));
+  }
+
   const rawBlocks = groupPdfTextItemsIntoBlocks(textContent.items, viewport.height);
+  console.log(`%c[診斷] 第${pageNumber}頁 rawBlocks.length =`, 'color:teal', rawBlocks.length);
 
-  if (rawBlocks.length === 0) return null;
+  if (rawBlocks.length === 0) {
+    console.log(`%c[診斷] 第${pageNumber}頁 → 回傳 null`, 'color:orange;font-weight:bold');
+    return null;
+  }
 
-  return rawBlocks.map((b, idx) => ({
+  const result = rawBlocks.map((b, idx) => ({
     id: `p${pageNumber}-b${idx + 1}`,
     type: b.maxFontSize >= 20 ? 'heading' : 'text',
     text: b.text,
   }));
+  console.log(`%c[診斷] 第${pageNumber}頁 → 回傳非null，blocks=`, 'color:orange;font-weight:bold', JSON.stringify(result));
+  return result;
 }
 
 // ============================================================
@@ -2014,11 +2025,17 @@ async function processSource(sourceType, fileOrText) {
   }
 
   const { pagesBlocks, fileBytes } = await parser(fileOrText);
+  console.log('%c[診斷] parser回傳的pagesBlocks（轉換前）:', 'color:magenta;font-weight:bold',
+    pagesBlocks.map(b => b === null ? 'null' : `非null(${b.length}個block)`));
+
   const pageResults = pagesBlocks.map(blocks =>
     blocks
       ? { blocks, buildState: 'editing' }
       : { blocks: [], buildState: 'waiting_choice' }
   );
+  console.log('%c[診斷] 轉換後的pageResults buildState:', 'color:magenta;font-weight:bold',
+    pageResults.map(p => p.buildState));
+
   return { pageResults, fileBytes };
 }
 
