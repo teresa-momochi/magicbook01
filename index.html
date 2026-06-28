@@ -490,23 +490,23 @@
     <h1>📖 建立教材</h1>
     <p>請選擇建立方式</p>
     <div class="source-grid">
-      <button class="source-option" data-source="pdf">
+      <button class="source-option" data-source="pdf" disabled>
         <span class="source-icon">📄</span>
         <span class="source-label">PDF</span>
       </button>
-      <button class="source-option" data-source="pptx">
+      <button class="source-option" data-source="pptx" disabled>
         <span class="source-icon">📊</span>
         <span class="source-label">PowerPoint</span>
       </button>
-      <button class="source-option" data-source="word">
+      <button class="source-option" data-source="word" disabled>
         <span class="source-icon">📝</span>
         <span class="source-label">Word</span>
       </button>
-      <button class="source-option" data-source="url">
+      <button class="source-option" data-source="url" disabled>
         <span class="source-icon">🌐</span>
         <span class="source-label">網址</span>
       </button>
-      <button class="source-option" data-source="txt">
+      <button class="source-option" data-source="txt" disabled>
         <span class="source-icon">📄</span>
         <span class="source-label">TXT</span>
       </button>
@@ -618,9 +618,9 @@
       <button id="insertPageBtn" title="新增一個教材來源">＋ 新增來源</button>
       <div class="source-picker" id="sourcePicker">
         <div class="source-picker-title">選擇教材來源</div>
-        <button class="source-picker-option" data-source-type="word">📝 Word</button>
-        <button class="source-picker-option" data-source-type="txt">📄 純文字</button>
         <button class="source-picker-option" data-source-type="image">🖼 圖片</button>
+        <button class="source-picker-option" data-source-type="word" disabled>📝 Word</button>
+        <button class="source-picker-option" data-source-type="txt" disabled>📄 純文字</button>
         <button class="source-picker-option" data-source-type="pptx" disabled>📊 PowerPoint</button>
         <button class="source-picker-option" data-source-type="xlsx" disabled>📈 Excel</button>
       </div>
@@ -1655,6 +1655,16 @@ document.getElementById('backToSourceFromUrlBtn').addEventListener('click', () =
 
 document.getElementById('genericAddMaterialBtn').addEventListener('click', async () => {
   const title = document.getElementById('genericMaterialNameInput').value || '未命名教材';
+
+  if (pendingSource === 'image') {
+    // 圖片是視覺素材，不是用來取得文字的來源 —— 直接給空白可編輯區，
+    // 體驗跟「直接開始編輯」一致，文字完全由老師自己輸入或貼上。
+    const fileBytes = new Uint8Array(await genericSelectedFile.arrayBuffer());
+    const blocks = createManualBlankBlocks(1);
+    await createBookFromBlocks(title, [{ blocks, buildState: 'editing' }], 'image', genericSelectedFile.name, fileBytes);
+    return;
+  }
+
   const { pageResults, fileBytes } = await processSource(pendingSource, genericSelectedFile);
   await createBookFromBlocks(title, pageResults, pendingSource, genericSelectedFile.name, fileBytes);
 });
@@ -2427,16 +2437,24 @@ function getPdfBytesCopy(sourceId) {
  * 對應 PRD：圖片型教材建立流程 — AI 自動辨識（扣點）／自行建立（免費），由使用者選擇。
  * 文案以老師的角度描述，不出現技術細節（OCR、token、AI 模型等字眼）。
  */
+/**
+ * 第一版功能開關：AI 辨識／OCR 暫不對外開放。
+ * 相關函式（runOcrForPage、estimatePointsForPage 等）仍保留在檔案裡，
+ * 之後要恢復時，只需要把這個常數改回 true，不需要重寫任何邏輯。
+ */
+const AI_RECOGNITION_ENABLED = false;
+
 async function showBuildChoiceForPage(pageNum, container) {
   const points = estimatePointsForPage();
   const pageData = state.pages.find(p => p.pageNumber === pageNum);
-  const canUseAi = await checkAiAvailableForPage(pageData);
+  const canUseAi = AI_RECOGNITION_ENABLED && await checkAiAvailableForPage(pageData);
 
   container.innerHTML = `
     <div class="build-choice">
       <div class="build-choice-title">這一頁還沒有文字內容</div>
       <div class="build-choice-desc">這個來源沒有現成的文字，請選擇要怎麼把文字建立起來：</div>
 
+      ${AI_RECOGNITION_ENABLED ? `
       <div class="build-choice-option${canUseAi ? '' : ' build-choice-option-disabled'}">
         <div class="build-choice-option-header">
           <strong>🤖 讓 AI 幫我打好文字</strong>
@@ -2447,6 +2465,7 @@ async function showBuildChoiceForPage(pageNum, container) {
           : '這種來源格式目前無法使用 AI 辨識，請改用手動輸入或貼上文字。'}</div>
         <button class="${canUseAi ? 'primary-btn' : 'secondary-btn'}" id="startAiRecognizeBtn" ${canUseAi ? '' : 'disabled'}>${canUseAi ? `讓 AI 幫忙建立（${points} 點）` : '無法使用 AI'}</button>
       </div>
+      ` : ''}
 
       <div class="build-choice-option">
         <div class="build-choice-option-header">
@@ -2648,6 +2667,32 @@ function renderBlocksIntoContainer(blocks, container, pageNum) {
     focusLastTextarea(container);
   });
   container.appendChild(addBtn);
+
+  // 📋 貼上文字：一次貼入一大段文字，依空行自動切成多個 Block，
+  // 附加在這一頁目前已有的 Block 之後 —— 圖片這類沒有經過
+  // waiting_choice 選擇畫面的來源，仍然需要這個快捷方式，
+  // 不用老師一段一段手動拆。
+  const pasteBtn = document.createElement('button');
+  pasteBtn.className = 'add-block-btn';
+  pasteBtn.textContent = '📋 貼上文字';
+  pasteBtn.addEventListener('click', () => {
+    const text = prompt('請貼上文字（段落之間請空一行，會自動切成多個 Block）：');
+    if (text === null) return;
+    const newBlocks = pastedTextToBlocks(text, pageNum).map(b => ({
+      ...b,
+      id: `p${pageNum}-b-paste-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    }));
+    // 若原本只有一個空白 Block（例如圖片剛建立時的初始狀態），直接取代它，
+    // 不留下一個多餘的空白欄位；否則附加在現有內容之後。
+    const isOnlyEmptyBlock = pageData.blocks.length === 1 && !pageData.blocks[0].text.trim();
+    if (isOnlyEmptyBlock) {
+      pageData.blocks = newBlocks;
+    } else {
+      pageData.blocks.push(...newBlocks);
+    }
+    rerender();
+  });
+  container.appendChild(pasteBtn);
 }
 
 /**
@@ -2748,11 +2793,29 @@ async function handleAddSource(sourceType) {
     return;
   }
 
+  if (sourceType === 'image') {
+    // 圖片是視覺素材，不是用來取得文字的來源 —— 不經過 processSource／
+    // waiting_choice 這套「先嘗試取得文字、失敗才問」的機制，選完圖片後
+    // 直接進入可編輯的文字區，體驗跟「直接開始編輯」一致，只是這頁多了
+    // 一張圖片素材陪著。文字完全由老師自己輸入或貼上。
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async () => {
+      const file = input.files[0];
+      if (!file) return;
+      const fileBytes = new Uint8Array(await file.arrayBuffer());
+      const blocks = createManualBlankBlocks(1);
+      await insertNewSource('image', file.name, [{ blocks, buildState: 'editing' }], fileBytes);
+    };
+    input.click();
+    return;
+  }
+
   // 其他格式都需要先選檔，選完後統一交給 processSource 判斷
   const input = document.createElement('input');
   input.type = 'file';
   const acceptMap = {
-    image: 'image/*',
     word: '.doc,.docx',
     pptx: '.ppt,.pptx',
     xlsx: '.xls,.xlsx',
