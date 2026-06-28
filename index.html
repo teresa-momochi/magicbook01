@@ -494,7 +494,7 @@
         <span class="source-icon">📄</span>
         <span class="source-label">PDF</span>
       </button>
-      <button class="source-option" data-source="powerpoint">
+      <button class="source-option" data-source="pptx">
         <span class="source-icon">📊</span>
         <span class="source-label">PowerPoint</span>
       </button>
@@ -1611,10 +1611,10 @@ document.querySelectorAll('.source-option').forEach(btn => {
  * 只是依來源調整標題、說明文字與接受的檔案類型。
  */
 const FILE_SOURCE_CONFIG = {
-  word:       { title: '📝 上傳 Word',       desc: '選擇 .docx 檔案，系統會嘗試取得文字內容', accept: '.doc,.docx', icon: '📝' },
-  powerpoint: { title: '📊 上傳 PowerPoint', desc: '選擇 .pptx 檔案，系統會嘗試取得文字內容', accept: '.ppt,.pptx', icon: '📊' },
-  txt:        { title: '📄 上傳 TXT',        desc: '選擇 .txt 檔案，直接載入文字內容',       accept: '.txt',       icon: '📄' },
-  image:      { title: '🖼 上傳圖片',        desc: '選擇圖片，系統會嘗試辨識圖片中的文字',   accept: 'image/*',   icon: '🖼' },
+  word:  { title: '📝 上傳 Word',       desc: '選擇 .docx 檔案，系統會嘗試取得文字內容', accept: '.doc,.docx', icon: '📝' },
+  pptx:  { title: '📊 上傳 PowerPoint', desc: '選擇 .pptx 檔案，系統會嘗試取得文字內容', accept: '.ppt,.pptx', icon: '📊' },
+  txt:   { title: '📄 上傳 TXT',        desc: '選擇 .txt 檔案，直接載入文字內容',       accept: '.txt',       icon: '📄' },
+  image: { title: '🖼 上傳圖片',        desc: '選擇圖片，可搭配 AI 辨識或自行輸入文字', accept: 'image/*',   icon: '🖼' },
 };
 
 function showFileUploadScreen(source) {
@@ -1655,8 +1655,8 @@ document.getElementById('backToSourceFromUrlBtn').addEventListener('click', () =
 
 document.getElementById('genericAddMaterialBtn').addEventListener('click', async () => {
   const title = document.getElementById('genericMaterialNameInput').value || '未命名教材';
-  const blocks = await acquireTextForSource(pendingSource, genericSelectedFile);
-  await createBookFromBlocks(title, blocks);
+  const { pageResults, fileBytes } = await processSource(pendingSource, genericSelectedFile);
+  await createBookFromBlocks(title, pageResults, pendingSource, genericSelectedFile.name, fileBytes);
 });
 
 document.getElementById('urlAddMaterialBtn').addEventListener('click', async () => {
@@ -1666,74 +1666,48 @@ document.getElementById('urlAddMaterialBtn').addEventListener('click', async () 
     return;
   }
   const title = document.getElementById('urlMaterialNameInput').value || '未命名教材';
-  const blocks = await acquireTextForSource('url', url);
-  await createBookFromBlocks(title, blocks);
+  // 網址目前沒有對應的免費 Parser（尚未實作網頁文字擷取），
+  // 直接交給老師選擇 AI／手動輸入／貼上文字，不塞占位文字假裝成功。
+  const pageResults = [{ blocks: [], buildState: 'waiting_choice' }];
+  await createBookFromBlocks(title, pageResults, 'url', url, null);
 });
 
 /**
- * 依來源取得文字，回傳 Block 陣列。
- * 這是「Text Acquisition」這一步目前的統一出口 —— 之後每種來源真正的
- * 取得文字邏輯（解析 Word／PowerPoint／網頁，或更準確的 OCR）都會在這裡
- * 逐步補完，呼叫端（建立教材的流程）完全不需要跟著改動。
+ * 建立教材的共用收尾邏輯：不管文字是怎麼取得的（或完全沒有來源，
+ * 例如「直接開始編輯」），最終都收斂成同一套流程 —— 建立 Book、
+ * 視需要建立 Source、寫入每一頁的 blocks／buildState，進入 Editor。
+ *
+ * pageResults：[{ blocks, buildState }]，跟 processSource() 的回傳格式一致。
+ * sourceType／fileLabel／fileBytes：若這次建立有對應的來源（例如圖片／Word），
+ * 會先呼叫 addSource() 記錄下來；若是「直接開始編輯」這類無來源情境，
+ * 傳 null 即可，頁面的 sourceId 會是 null。
  */
-async function acquireTextForSource(source, fileOrUrl) {
-  if (source === 'txt') {
-    // TXT 不需要假資料：直接讀取檔案內容即可
-    const text = await fileOrUrl.text();
-    return pastedTextToBlocks(text, 1);
-  }
-
-  if (source === 'image') {
-    // 圖片：沿用已經驗證過的 OCR 流程，對單張圖片直接辨識
-    const worker = await getOcrWorker();
-    const bitmap = await createImageBitmap(fileOrUrl);
-    const canvas = document.createElement('canvas');
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    canvas.getContext('2d').drawImage(bitmap, 0, 0);
-    const { data } = await worker.recognize(canvas);
-    // 沿用「貼上文字」的切分邏輯（依空行分段），單張圖片辨識出來的文字通常不多，
-    // 這個切分規則已經驗證過，不需要另外維護一套圖片專用的切分邏輯。
-    return pastedTextToBlocks(data.text, 1);
-  }
-
-  if (source === 'word' || source === 'powerpoint') {
-    // 尚未實作真正的文件解析：先用占位內容頂著入口，
-    // 讓整條 Book Creation → Editor → Repository → Reading 的流程可以被驗證。
-    const label = source === 'word' ? 'Word' : 'PowerPoint';
-    return [{
-      id: `p1-b-${Date.now()}`,
-      type: 'text',
-      text: `（${label} 文字擷取功能開發中。已選擇檔案：${fileOrUrl.name}，請先手動輸入內容。）`,
-    }];
-  }
-
-  if (source === 'url') {
-    // 尚未實作真正的網頁文字擷取：先用占位內容頂著入口
-    return [{
-      id: `p1-b-${Date.now()}`,
-      type: 'text',
-      text: `（網址文字擷取功能開發中。網址：${fileOrUrl}，請先手動輸入內容。）`,
-    }];
-  }
-
-  return [{ id: `p1-b-${Date.now()}`, type: 'text', text: '' }];
-}
-
-/**
- * 建立教材的共用收尾邏輯：不管文字是怎麼取得的，
- * 一旦變成 Blocks，後面的流程（存進 Repository、進入 Editor）完全一致。
- */
-async function createBookFromBlocks(title, blocks) {
+async function createBookFromBlocks(title, pageResults, sourceType = null, fileLabel = null, fileBytes = null) {
   state.materialName = title;
-  state.pages = [{ pageNumber: 1, blocks, sourceId: null, sourcePageIndex: null, buildState: 'editing' }];
 
-  // 不自行產生 id —— books.id 是 uuid 型欄位，交給資料庫的
-  // default gen_random_uuid() 生成，這裡用回傳結果設定 currentBookId。
   const savedBook = await bookRepository.saveBook({ title: state.materialName });
   state.currentBookId = savedBook.id;
 
-  await bookRepository.savePage(state.currentBookId, 1, blocks);
+  let sourceId = null;
+  if (sourceType) {
+    const source = await bookRepository.addSource(state.currentBookId, sourceType, fileLabel);
+    sourceId = source.id;
+    if (fileBytes) {
+      state.sourceFilesById = state.sourceFilesById || {};
+      state.sourceFilesById[sourceId] = fileBytes;
+    }
+  }
+
+  const pageBlocksList = pageResults.map(p => p.blocks);
+  await bookRepository.insertPagesAfter(state.currentBookId, 0, sourceId, pageBlocksList);
+  const savedBookWithPages = await bookRepository.loadBook(state.currentBookId);
+
+  // loadBook() 回傳的 pages 只有 blocks／sourceId／sourcePageIndex，buildState
+  // 是前端流程控制欄位，這裡依剛才取得文字的結果補上，不存進資料庫。
+  state.pages = savedBookWithPages.pages.map((p, idx) => ({
+    ...p,
+    buildState: pageResults[idx]?.buildState ?? 'editing',
+  }));
 
   renderStepper(2);
   state.currentEditPage = 1;
@@ -1748,7 +1722,8 @@ async function createBookFromBlocks(title, blocks) {
  * 老師立即可以開始輸入，不應出現任何中介步驟或等待畫面。
  */
 async function startManualBookCreation() {
-  await createBookFromBlocks('未命名教材', [{ id: `p1-b-${Date.now()}`, type: 'text', text: '' }]);
+  const blocks = [{ id: `p1-b-${Date.now()}`, type: 'text', text: '' }];
+  await createBookFromBlocks('未命名教材', [{ blocks, buildState: 'editing' }]);
   focusLastTextarea(document.getElementById('editBlocks'));
 }
 
