@@ -1,0 +1,2583 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>教材魔法書 - MVP 流程原型</title>
+<style>
+  :root {
+    --border: #e2e2e2;
+    --bg: #fafafa;
+    --accent: #2e7d32;
+    --accent-dark: #1b5e20;
+    --panel-bg: #1f2430;
+    --panel-text: #f4f4f4;
+    --warn-bg: #fff8e1;
+    --warn-border: #f0c14b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Helvetica Neue", "PingFang TC", "Microsoft JhengHei", sans-serif;
+    background: var(--bg);
+    color: #1a1a1a;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ====== 頂部：步驟指示器（對應五步驟流程）====== */
+  .stepper {
+    display: flex;
+    align-items: center;
+    padding: 14px 24px;
+    background: white;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    gap: 4px;
+    overflow-x: auto;
+  }
+  .step {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: #aaa;
+    white-space: nowrap;
+  }
+  .step.active { color: var(--accent-dark); font-weight: 600; }
+  .step.done { color: #999; }
+  .step-dot {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    background: #e8e8e8;
+    color: #999;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px;
+  }
+  .step.active .step-dot { background: var(--accent); color: white; }
+  .step.done .step-dot { background: #c8e6c9; color: var(--accent-dark); }
+  .step-arrow { color: #ccc; margin: 0 4px; }
+
+  /* ====== 各畫面容器 ====== */
+  .screen { flex: 1; overflow-y: auto; display: none; }
+  .screen.active { display: flex; flex-direction: column; }
+
+  /* ---- 畫面 1：教材庫 / 新增教材 ---- */
+  #screen-library { padding: 40px; align-items: center; }
+
+  /* 我的魔法書（首頁） */
+  #screen-mybooks { padding: 32px 40px; overflow-y: auto; }
+  .mybooks-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .mybooks-header h1 { font-size: 22px; margin: 0; }
+  .mybooks-quota { font-size: 13px; color: #888; margin-bottom: 24px; }
+  .mybooks-quota.full { color: #c0392b; }
+  .mybooks-list {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 16px;
+  }
+  .mybooks-empty {
+    grid-column: 1 / -1; text-align: center; color: #999;
+    padding: 60px 0; font-size: 14px;
+  }
+  .book-card {
+    border: 1px solid var(--border); border-radius: 12px; padding: 18px;
+    background: white; cursor: pointer; transition: 0.12s;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .book-card:hover { border-color: var(--accent); box-shadow: 0 4px 14px rgba(0,0,0,0.06); }
+  .book-card .book-icon { font-size: 28px; }
+  .book-card .book-title { font-size: 15px; font-weight: 600; }
+  .book-card .book-meta { font-size: 12px; color: #999; }
+  .book-card .book-actions {
+    display: flex; gap: 6px; margin-top: 8px; opacity: 0; transition: 0.12s;
+  }
+  .book-card:hover .book-actions { opacity: 1; }
+  .book-card .book-actions button {
+    flex: 1; font-size: 12px; padding: 6px 8px; border: 1px solid var(--border);
+    background: white; border-radius: 6px; cursor: pointer;
+  }
+  .book-card .book-actions button:hover { background: #f3f3f3; }
+  .book-card .book-actions button.danger { color: #c0392b; border-color: #f1c6c0; }
+  .book-card .book-actions button.danger:hover { background: #fdecea; }
+  .back-link {
+    display: inline-block; margin-bottom: 16px; background: none; border: none;
+    color: #888; font-size: 13px; cursor: pointer; padding: 0;
+  }
+  .back-link:hover { color: var(--accent-dark); }
+
+  /* Book Creation：建立方式選擇 */
+  .source-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin: 24px 0;
+  }
+  .source-option {
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    padding: 20px 10px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: white;
+    cursor: pointer;
+    transition: 0.12s;
+  }
+  .source-option:hover:not(:disabled) {
+    border-color: var(--accent);
+    background: #f4faf4;
+  }
+  .source-option:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .source-icon { font-size: 28px; }
+  .source-label { font-size: 13px; color: #555; }
+  .source-note {
+    font-size: 12px; color: #999; text-align: center; margin-top: 8px;
+  }
+
+  /* 閱讀設定（Reading Settings） */
+  .reading-settings-box { position: relative; }
+  .settings-toggle-btn {
+    border: 1px solid var(--border); background: white; border-radius: 6px;
+    padding: 7px 12px; font-size: 13px; cursor: pointer;
+  }
+  .settings-toggle-btn:hover { background: #f3f3f3; }
+  .reading-settings-panel {
+    position: absolute; top: calc(100% + 6px); right: 0;
+    width: 240px; background: white; border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+    padding: 14px; z-index: 60; display: none;
+  }
+  .reading-settings-panel.show { display: block; }
+  .settings-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 0;
+  }
+  .settings-row + .settings-row { border-top: 1px solid #f0f0f0; }
+  .settings-label { font-size: 13px; color: #555; }
+  .settings-controls { display: flex; align-items: center; gap: 8px; }
+  .settings-controls button {
+    width: 28px; height: 28px; border: 1px solid var(--border); background: white;
+    border-radius: 6px; cursor: pointer; font-size: 13px;
+  }
+  .settings-controls button:hover { background: #f3f3f3; }
+  .settings-value { font-size: 13px; color: #333; min-width: 38px; text-align: center; }
+  .settings-select {
+    border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px;
+    font-size: 13px; background: white;
+  }
+
+  .library-box { max-width: 480px; width: 100%; text-align: center; }
+  .library-box h1 { font-size: 22px; margin-bottom: 8px; }
+  .library-box p { color: #888; margin-bottom: 32px; font-size: 14px; }
+  .upload-zone {
+    border: 2px dashed #ccc;
+    border-radius: 16px;
+    padding: 48px 24px;
+    cursor: pointer;
+    transition: 0.15s;
+  }
+  .upload-zone:hover { border-color: var(--accent); background: #f4faf4; }
+  .upload-zone.drag-over { border-color: var(--accent); background: #e8f5e9; border-width: 3px; }
+  .upload-zone .icon { font-size: 40px; margin-bottom: 12px; }
+  .name-input-row { margin-top: 24px; text-align: left; display: none; }
+  .name-input-row.show { display: block; }
+  .name-input-row label { font-size: 13px; color: #666; display: block; margin-bottom: 6px; }
+  .name-input-row input {
+    width: 100%; padding: 10px 14px; font-size: 15px;
+    border: 1px solid var(--border); border-radius: 8px;
+  }
+  .primary-btn {
+    margin-top: 20px;
+    background: var(--accent); color: white; border: none;
+    padding: 12px 28px; border-radius: 8px; font-size: 15px;
+    cursor: pointer; width: 100%;
+  }
+  .primary-btn:hover { background: var(--accent-dark); }
+  .primary-btn:disabled { background: #ccc; cursor: not-allowed; }
+
+  /* ---- 畫面 2：轉換中 ---- */
+  #screen-converting { align-items: center; justify-content: center; }
+  .converting-box { text-align: center; }
+  .spinner {
+    width: 48px; height: 48px; border-radius: 50%;
+    border: 4px solid #e0e0e0; border-top-color: var(--accent);
+    animation: spin 0.9s linear infinite;
+    margin: 0 auto 20px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .converting-box .method-tag {
+    display: inline-block; margin-top: 14px;
+    background: var(--warn-bg); border: 1px solid var(--warn-border);
+    padding: 4px 12px; border-radius: 20px; font-size: 12px;
+  }
+  .converting-log {
+    margin-top: 20px; font-size: 12px; color: #999;
+    max-width: 360px; text-align: left;
+  }
+  .converting-log div { padding: 2px 0; }
+
+  /* ---- 畫面 3 & 4：編輯模式 / 閱讀畫面（共用雙欄結構）---- */
+  .dual-pane-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 20px; border-bottom: 1px solid var(--border); background: white;
+    flex-shrink: 0;
+  }
+  .dual-pane-header h2 { font-size: 15px; margin: 0; font-weight: 600; }
+  .mode-badge {
+    font-size: 12px; padding: 4px 10px; border-radius: 12px;
+  }
+  .mode-badge.edit { background: #fff3cd; color: #8a6d00; }
+  .mode-badge.read { background: #d4edda; color: var(--accent-dark); }
+  .header-actions { display: flex; gap: 8px; }
+  .header-actions button {
+    border: 1px solid var(--border); background: white; border-radius: 6px;
+    padding: 7px 14px; font-size: 13px; cursor: pointer;
+  }
+  .header-actions button.primary { background: var(--accent); color: white; border: none; }
+  .header-actions button:hover { opacity: 0.85; }
+
+  .dual-main { flex: 1; display: flex; overflow: hidden; }
+  .pane { flex: 1; overflow-y: auto; padding: 24px; position: relative; }
+  .pane.pdf-pane { background: #eaeaea; display: flex; justify-content: center; border-right: 1px solid var(--border); }
+  .pane.content-pane { background: white; }
+  .pane-label {
+    position: sticky; top: -24px; margin: -24px -24px 16px -24px;
+    padding: 8px 24px; font-size: 12px; letter-spacing: 0.05em; color: #999;
+    background: inherit; border-bottom: 1px solid var(--border); z-index: 5;
+  }
+  canvas { box-shadow: 0 2px 12px rgba(0,0,0,0.12); background: white; max-width: 100%; }
+
+  .content-block-wrap {
+    max-width: 480px; margin: 0 auto; line-height: 1.9;
+    font-size: calc(18px * var(--reading-font-scale, 1));
+  }
+  .content-block-wrap h2 {
+    color: var(--accent); margin-bottom: 0.6em;
+    font-size: calc(26px * var(--reading-font-scale, 1));
+  }
+  .content-block-wrap p { margin: 0 0 1em 0; }
+
+  /* 閱讀模式：純顯示 */
+  #readBlocks p, #readBlocks h2 { cursor: pointer; }
+  #readBlocks p::selection, #readBlocks h2::selection { background: #fff1a8; }
+
+  /* 主動式查閱反白標記：點擊或選取文字後，這段文字會持續維持反白，
+     讓使用者清楚知道「目前查詢的是哪一段」，直到查詢完成或關閉面板。 */
+  .active-query-highlight {
+    background: #fff1a8;
+    border-radius: 3px;
+    padding: 1px 2px;
+    box-shadow:
+      0 0 0 1px rgba(240, 193, 75, 0.6),
+      0 0 8px 2px rgba(255, 213, 79, 0.45);
+    transition: box-shadow 0.15s ease-out;
+  }
+
+  /* 編輯模式：每個區塊變成可編輯文字框 — 老師是在寫教材，不是在填表單，
+     所以要給足夠的高度與留白，看起來像一段文件內容，不是一個輸入框。 */
+  .editable-block {
+    display: block; width: 100%; min-height: 64px;
+    border: 1px solid #e5e5e5; border-radius: 10px;
+    padding: 16px 18px; margin-bottom: 14px;
+    font-family: inherit; line-height: 1.8;
+    resize: vertical; background: #fcfcfa;
+  }
+  .editable-block::placeholder { color: #bbb; }
+  .editable-block:hover { background: #fafbf7; border-color: #d8e4d2; }
+  .editable-block:focus {
+    outline: none; border-color: var(--accent); background: white;
+    box-shadow: 0 0 0 3px rgba(46,125,50,0.08);
+  }
+  .editable-block.heading { font-size: 26px; color: var(--accent); font-weight: 600; min-height: 48px; }
+  .editable-block.body { font-size: 18px; }
+
+  .paste-textarea {
+    display: block; width: 100%; min-height: 320px;
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 18px; font-family: inherit; font-size: 16px;
+    line-height: 1.8; resize: vertical; margin-bottom: 14px;
+  }
+  .paste-textarea:focus { outline: none; border-color: var(--accent); }
+
+  /* 圖片型教材：AI辨識／自行建立 選擇畫面 */
+  .build-choice { max-width: 420px; margin: 20px auto; }
+  .build-choice-title { font-size: 17px; font-weight: 600; margin-bottom: 6px; }
+  .build-choice-desc { font-size: 13px; color: #888; margin-bottom: 20px; }
+  .build-choice-option {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+  .build-choice-option-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 6px; font-size: 15px;
+  }
+  .build-choice-option-desc { font-size: 13px; color: #777; margin-bottom: 12px; line-height: 1.5; }
+  .points-badge {
+    background: #fff3cd; color: #8a6d00;
+    font-size: 12px; padding: 3px 10px; border-radius: 12px;
+  }
+  .points-badge.free { background: #d4edda; color: var(--accent-dark); }
+  .secondary-btn {
+    background: white; color: #555; border: 1px solid var(--border);
+    padding: 10px 20px; border-radius: 8px; font-size: 14px;
+    cursor: pointer; width: 100%;
+  }
+  .secondary-btn:hover { background: #f5f5f5; }
+  .block-controls {
+    display: flex; gap: 4px; margin-bottom: 10px; opacity: 0; transition: 0.1s;
+  }
+  .block-row:hover .block-controls { opacity: 1; }
+  .block-row { margin-bottom: 4px; }
+  .block-controls button {
+    font-size: 11px; border: 1px solid var(--border); background: white;
+    border-radius: 4px; padding: 2px 8px; cursor: pointer; color: #777;
+  }
+  .block-controls button:hover { background: #f0f0f0; }
+  .block-controls button:disabled { opacity: 0.35; cursor: default; }
+  .block-controls button:disabled:hover { background: white; }
+
+  .add-block-btn {
+    display: block;
+    width: 100%;
+    margin-top: 8px;
+    padding: 10px;
+    border: 1px dashed #ccc;
+    border-radius: 8px;
+    background: transparent;
+    color: #888;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .add-block-btn:hover { border-color: var(--accent); color: var(--accent-dark); background: #f4faf4; }
+
+  footer {
+    display: flex; align-items: center; justify-content: center; gap: 16px;
+    padding: 12px; border-top: 1px solid var(--border); background: white; flex-shrink: 0;
+    position: relative;
+  }
+  footer button {
+    border: 1px solid var(--border); background: white; border-radius: 8px;
+    padding: 8px 18px; font-size: 14px; cursor: pointer;
+  }
+  footer button:hover { background: #f3f3f3; }
+  footer button:disabled { opacity: 0.35; cursor: default; }
+  footer .page-indicator { font-size: 14px; color: #555; min-width: 70px; text-align: center; }
+  .delete-page-btn {
+    position: absolute; right: 16px;
+    color: #c0392b; border-color: #f1c6c0 !important;
+  }
+  .delete-page-btn:hover { background: #fdecea !important; }
+
+  /* 選字互動面板 */
+  .selection-panel {
+    position: absolute; background: var(--panel-bg); color: var(--panel-text);
+    border-radius: 10px; padding: 8px; display: flex; gap: 4px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.25); z-index: 50;
+  }
+  .selection-panel button {
+    background: none; border: none; color: var(--panel-text); font-size: 13px;
+    padding: 7px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap;
+  }
+  .selection-panel button:hover { background: rgba(255,255,255,0.15); }
+  .result-box {
+    position: absolute; background: white; border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px; font-size: 14px; line-height: 1.6;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.15); z-index: 50; max-width: 280px;
+  }
+  .result-box .label { color: #888; font-size: 11px; margin-bottom: 4px; }
+
+  .hint-banner {
+    background: var(--warn-bg); border-bottom: 1px solid var(--warn-border);
+    padding: 8px 20px; font-size: 13px; color: #6b5900; text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<div class="stepper" id="stepper"></div>
+
+<!-- ============ 畫面 -1：登入（最小驗證流程：Email + 密碼） ============ -->
+<div class="screen active" id="screen-login">
+  <div class="library-box">
+    <h1>📖 教材魔法書</h1>
+    <p>登入後管理你自己的教材</p>
+    <div class="name-input-row show">
+      <label>Email</label>
+      <input type="email" id="loginEmail" placeholder="teacher@example.com">
+    </div>
+    <div class="name-input-row show">
+      <label>密碼</label>
+      <input type="password" id="loginPassword" placeholder="••••••••">
+    </div>
+    <button class="primary-btn" id="loginBtn">登入</button>
+    <button class="secondary-btn" id="signupBtn" style="margin-top:8px;">註冊新帳號</button>
+    <button class="back-link" id="forgotPasswordBtn" style="margin-top:12px; display:block; text-align:center; width:100%;">忘記密碼？</button>
+    <div id="loginError" style="display:none; margin-top:16px; padding:12px; background:#fdecea; border:1px solid #f5b7b1; border-radius:8px; font-size:13px; color:#a13a2f; text-align:left;"></div>
+  </div>
+</div>
+
+<!-- ============ 畫面 -0.5：設定新密碼（從忘記密碼信件連結回來時顯示） ============ -->
+<div class="screen" id="screen-reset-password">
+  <div class="library-box">
+    <h1>🔑 設定新密碼</h1>
+    <p>請輸入你的新密碼</p>
+    <div class="name-input-row show">
+      <label>新密碼</label>
+      <input type="password" id="newPasswordInput" placeholder="至少 6 個字元">
+    </div>
+    <button class="primary-btn" id="updatePasswordBtn">更新密碼</button>
+    <div id="resetPasswordError" style="display:none; margin-top:16px; padding:12px; background:#fdecea; border:1px solid #f5b7b1; border-radius:8px; font-size:13px; color:#a13a2f; text-align:left;"></div>
+  </div>
+</div>
+
+<!-- ============ 畫面 1：教材庫／新增教材 ============ -->
+<!-- ============ 畫面 0：我的魔法書（首頁） ============ -->
+<div class="screen" id="screen-mybooks">
+  <div class="mybooks-header">
+    <h1>📚 我的魔法書</h1>
+    <button class="primary-btn" id="goToAddBookBtn" style="width:auto; padding:10px 22px;">＋ 新增教材</button>
+  </div>
+  <div class="mybooks-header" style="margin-top:-12px;">
+    <span style="font-size:13px; color:#888;" id="loggedInAsLabel"></span>
+    <button class="back-link" id="logoutBtn" style="margin:0;">登出</button>
+  </div>
+  <div class="mybooks-quota" id="mybooksQuota"></div>
+  <div class="mybooks-list" id="mybooksList">
+    <div class="mybooks-empty">還沒有教材，點選「＋ 新增教材」開始建立第一本。</div>
+  </div>
+</div>
+
+<!-- ============ 畫面 0.5：建立教材 — 選擇建立方式（Book Creation） ============ -->
+<div class="screen" id="screen-source-select">
+  <div class="library-box">
+    <button class="back-link" id="backToMyBooksFromSourceBtn">← 回到我的魔法書</button>
+    <h1>📖 建立教材</h1>
+    <p>請選擇建立方式</p>
+    <div class="source-grid">
+      <button class="source-option" data-source="pdf">
+        <span class="source-icon">📄</span>
+        <span class="source-label">PDF</span>
+      </button>
+      <button class="source-option" data-source="powerpoint">
+        <span class="source-icon">📊</span>
+        <span class="source-label">PowerPoint</span>
+      </button>
+      <button class="source-option" data-source="word">
+        <span class="source-icon">📝</span>
+        <span class="source-label">Word</span>
+      </button>
+      <button class="source-option" data-source="url">
+        <span class="source-icon">🌐</span>
+        <span class="source-label">網址</span>
+      </button>
+      <button class="source-option" data-source="txt">
+        <span class="source-icon">📄</span>
+        <span class="source-label">TXT</span>
+      </button>
+      <button class="source-option" data-source="image">
+        <span class="source-icon">🖼</span>
+        <span class="source-label">圖片</span>
+      </button>
+      <button class="source-option" data-source="manual">
+        <span class="source-icon">⌨️</span>
+        <span class="source-label">直接開始編輯</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 畫面 1b：新增教材（Word / PowerPoint / 圖片 上傳，共用同一個畫面） ============ -->
+<div class="screen" id="screen-file-upload">
+  <div class="library-box">
+    <button class="back-link" id="backToSourceFromFileBtn">← 回到建立方式選擇</button>
+    <h1 id="fileUploadTitle">📝 上傳檔案</h1>
+    <p id="fileUploadDesc">選擇檔案後，系統會嘗試取得文字內容</p>
+    <div class="upload-zone" id="genericUploadZone">
+      <div class="icon" id="genericUploadIcon">📁</div>
+      <div id="genericUploadZoneText">點擊選擇檔案，或拖曳到此處</div>
+      <input type="file" id="genericFileInput" style="display:none">
+    </div>
+    <div class="name-input-row" id="genericNameInputRow">
+      <label>教材名稱（可修改）</label>
+      <input type="text" id="genericMaterialNameInput">
+      <button class="primary-btn" id="genericAddMaterialBtn">新增</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 畫面 1c：新增教材（網址） ============ -->
+<div class="screen" id="screen-url-input">
+  <div class="library-box">
+    <button class="back-link" id="backToSourceFromUrlBtn">← 回到建立方式選擇</button>
+    <h1>🌐 輸入網址</h1>
+    <p>輸入網頁網址，系統會嘗試取得頁面文字內容</p>
+    <div class="name-input-row show">
+      <label>網址</label>
+      <input type="text" id="urlInput" placeholder="https://example.com">
+    </div>
+    <div class="name-input-row show">
+      <label>教材名稱（可修改）</label>
+      <input type="text" id="urlMaterialNameInput">
+      <button class="primary-btn" id="urlAddMaterialBtn">新增</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 畫面 1：新增教材（PDF 上傳，七種建立方式之一） ============ -->
+<div class="screen" id="screen-library">
+  <div class="library-box">
+    <button class="back-link" id="backToMyBooksBtn">← 回到建立方式選擇</button>
+    <h1>📄 上傳 PDF</h1>
+    <p>上傳一份 PDF，系統會自動轉換成可互動閱讀的格式</p>
+    <div class="upload-zone" id="uploadZone">
+      <div class="icon">📄</div>
+      <div id="uploadZoneText">點擊選擇 PDF 檔案，或拖曳到此處</div>
+      <input type="file" id="fileInput" accept="application/pdf" style="display:none">
+    </div>
+    <div id="loadError" style="display:none; margin-top:16px; padding:12px; background:#fdecea; border:1px solid #f5b7b1; border-radius:8px; font-size:13px; color:#a13a2f; text-align:left;"></div>
+    <div class="name-input-row" id="nameInputRow">
+      <label>教材名稱（可修改）</label>
+      <input type="text" id="materialNameInput">
+      <button class="primary-btn" id="addMaterialBtn">新增</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 畫面 2：教材轉換中 ============ -->
+<div class="screen" id="screen-converting">
+  <div class="converting-box">
+    <div class="spinner"></div>
+    <div id="convertingStatus">分析教材內容...</div>
+    <div class="converting-log" id="convertingLog"></div>
+  </div>
+</div>
+
+<!-- ============ 畫面 3：編輯模式 ============ -->
+<div class="screen" id="screen-edit">
+  <div class="hint-banner">✏️ 編輯模式 — 系統自動轉換的內容可能有誤，請對照左側原始教材校對修正</div>
+  <div class="dual-pane-header">
+    <h2 id="editTitle">教材標題</h2>
+    <div class="header-actions">
+      <span class="mode-badge edit">編輯模式</span>
+      <button class="primary" id="saveBtn">儲存並進入閱讀模式</button>
+    </div>
+  </div>
+  <div class="dual-main">
+    <div class="pane pdf-pane">
+      <div class="pane-label">原始教材（PDF）</div>
+      <canvas id="editPdfCanvas"></canvas>
+    </div>
+    <div class="pane content-pane">
+      <div class="pane-label">互動教材（可編輯）</div>
+      <div class="content-block-wrap" id="editBlocks"></div>
+    </div>
+  </div>
+  <footer>
+    <button id="editPrevBtn">← 上一頁</button>
+    <span class="page-indicator" id="editPageIndicator">第 1 / 1 頁</span>
+    <button id="editNextBtn">下一頁 →</button>
+    <button id="deletePageBtn" class="delete-page-btn">🗑 刪除本頁</button>
+  </footer>
+</div>
+
+<!-- ============ 畫面 4：閱讀畫面（含互動） ============ -->
+<div class="screen" id="screen-read">
+  <div class="dual-pane-header">
+    <h2 id="readTitle">教材標題</h2>
+    <div class="header-actions">
+      <button id="backToMyBooksFromReadBtn" class="back-link" style="margin:0;">← 我的魔法書</button>
+      <div class="reading-settings-box" id="readingSettingsBox">
+        <button id="toggleReadingSettingsBtn" class="settings-toggle-btn">⚙️ 閱讀設定</button>
+        <div class="reading-settings-panel" id="readingSettingsPanel">
+          <div class="settings-row">
+            <span class="settings-label">文字大小</span>
+            <div class="settings-controls">
+              <button id="fontSizeDownBtn">A－</button>
+              <span class="settings-value" id="fontSizeValue">100%</span>
+              <button id="fontSizeUpBtn">A＋</button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <span class="settings-label">播放速度</span>
+            <select id="playbackRateSelect" class="settings-select">
+              <option value="0.5">0.5×</option>
+              <option value="0.75">0.75×</option>
+              <option value="1" selected>1.0×</option>
+              <option value="1.25">1.25×</option>
+              <option value="1.5">1.5×</option>
+              <option value="1.75">1.75×</option>
+              <option value="2">2.0×</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <span class="mode-badge read">閱讀模式</span>
+      <button id="backToEditBtn">回到編輯模式</button>
+    </div>
+  </div>
+  <div class="dual-main">
+    <div class="pane pdf-pane">
+      <div class="pane-label">原始教材（PDF）</div>
+      <canvas id="readPdfCanvas"></canvas>
+    </div>
+    <div class="pane content-pane" id="readPane">
+      <div class="pane-label">互動教材（選取文字即可互動）</div>
+      <div class="content-block-wrap" id="readBlocks"></div>
+    </div>
+  </div>
+  <footer>
+    <button id="readPrevBtn">← 上一頁</button>
+    <span class="page-indicator" id="readPageIndicator">第 1 / 1 頁</span>
+    <button id="readNextBtn">下一頁 →</button>
+  </footer>
+</div>
+
+<script type="module">
+// ============================================================
+// 啟動檢查：先確認 PDF.js 是否能正常載入。
+// 若用 file:// 直接開啟此檔案，部分瀏覽器（尤其 Chrome）會因為
+// ES module 的 CORS 限制而擋掉 import，這裡會明確顯示錯誤，
+// 而不是讓畫面停在「沒有任何反應」的狀態。
+// ============================================================
+let pdfjsLib;
+try {
+  // 改用 CDN 載入：<script> 標籤載入外部資源不受 file:// 的 ES module CORS 限制影響，
+  // 這跟「import 本地檔案」是兩種不同的瀏覽器安全規則。
+  await new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.type = 'module';
+    script.textContent = `
+      import * as lib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.min.mjs';
+      window.__pdfjsLib = lib;
+      window.dispatchEvent(new Event('pdfjs-loaded'));
+    `;
+    window.addEventListener('pdfjs-loaded', resolve, { once: true });
+    setTimeout(() => reject(new Error('PDF.js 載入逾時（10 秒），請檢查網路連線')), 10000);
+    document.head.appendChild(script);
+  });
+  pdfjsLib = window.__pdfjsLib;
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs';
+} catch (err) {
+  document.getElementById('uploadZoneText').textContent = '初始化失敗';
+  const errBox = document.getElementById('loadError');
+  errBox.style.display = 'block';
+  errBox.innerHTML =
+    '<strong>無法載入 PDF 處理模組</strong><br>' +
+    '本原型需要連接網路（從 CDN 載入 PDF 處理元件）。請確認：<br>' +
+    '1. 目前裝置已連上網路<br>' +
+    '2. 若仍失敗，請改用 Chrome／Edge／Firefox 最新版開啟<br><br>' +
+    '錯誤詳情：' + err.message;
+  throw err;
+}
+
+// Tesseract.js（OCR 引擎）— 有 UMD 版本，可直接標準載入
+let Tesseract;
+try {
+  await new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+    script.onload = resolve;
+    script.onerror = () => reject(new Error('Tesseract.js 載入失敗'));
+    document.head.appendChild(script);
+    setTimeout(() => reject(new Error('Tesseract.js 載入逾時')), 15000);
+  });
+  Tesseract = window.Tesseract;
+} catch (err) {
+  document.getElementById('loadError').style.display = 'block';
+  document.getElementById('loadError').innerHTML =
+    '<strong>無法載入 OCR 模組</strong><br>錯誤詳情：' + err.message;
+  throw err;
+}
+
+// 共用的 OCR worker，避免每頁都重新初始化（初始化本身有下載語言模型的成本）
+let ocrWorker = null;
+async function getOcrWorker() {
+  if (!ocrWorker) {
+    ocrWorker = await Tesseract.createWorker('eng');
+  }
+  return ocrWorker;
+}
+
+// Supabase JS SDK — 有 UMD 版本，可直接標準載入
+let supabaseLib;
+try {
+  await new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js';
+    script.onload = resolve;
+    script.onerror = () => reject(new Error('Supabase SDK 載入失敗'));
+    document.head.appendChild(script);
+    setTimeout(() => reject(new Error('Supabase SDK 載入逾時')), 15000);
+  });
+  supabaseLib = window.supabase;
+} catch (err) {
+  document.getElementById('loginError').style.display = 'block';
+  document.getElementById('loginError').textContent = '無法載入 Supabase 模組：' + err.message;
+  throw err;
+}
+
+const SUPABASE_URL = 'https://lbysrnhhhgzcjldyatok.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_iMU_lerFc8AwTNK3hfwPfw_kzLfLFcW';
+const supabaseClient = supabaseLib.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// ============================================================
+// 資料結構說明
+//
+// Book（一本教材，對應 Repository 的 books + pages）：
+//   books:  { id, title, cover, createdAt, updatedAt }
+//   pages:  [{ pageNumber, blocks }]  —— 每頁獨立儲存，逐頁存取
+//
+// Repository 只認得 Blocks，不保存、也不知道教材原本來自 PDF、Word、
+// 直接輸入或其他來源 —— 這是 Book Creation Feature 的職責，文字一旦
+// 轉成 Blocks，來源的任務就完成了。
+//
+// state.pages 裡每個 page 額外帶的 originalPdfPage，只是這次示範用
+// PDF 來源時，本地畫面渲染需要的資訊（左側要顯示哪一頁 PDF 圖像），
+// 不是 Repository 的正式資料，不會被存進 books/pages。
+//
+// state 只放「目前畫面正在操作的東西」，不是正式資料 —— 正式資料一律經過
+// BookRepository 存取，state 只是暫存 UI 當下需要的執行期物件（如 pdfDoc）。
+// ============================================================
+const state = {
+  currentBookId: null,
+  materialName: '',
+  pdfDoc: null,
+  pages: [],
+  currentEditPage: 1,
+  currentReadPage: 1,
+  readingSettings: { fontSize: 100, playbackRate: 1.0 }, // 從 Repository 載入後覆寫
+};
+
+const STEPS = ['新增教材', '教材轉換', '編輯校對', '閱讀互動'];
+function renderStepper(activeIndex) {
+  const stepper = document.getElementById('stepper');
+  stepper.innerHTML = STEPS.map((label, i) => {
+    const cls = i === activeIndex ? 'active' : i < activeIndex ? 'done' : '';
+    const arrow = i < STEPS.length - 1 ? '<span class="step-arrow">→</span>' : '';
+    return `<div class="step ${cls}"><span class="step-dot">${i < activeIndex ? '✓' : i + 1}</span>${label}</div>${arrow}`;
+  }).join('');
+}
+
+// ============================================================
+// BookRepository — 資料存取介面
+//
+// 這是整個 App 唯一允許跟「資料儲存」打交道的邊界。畫面、Feature、
+// 流程都只呼叫這個介面的方法，完全不知道、也不需要知道底層實作是什麼。
+//
+// Repository 只認得 Blocks，不知道、也不需要知道教材原本是從 PDF、
+// Word、TXT、圖片或其他來源建立的——這些都是 Book Creation Feature
+// 的職責，文字一旦轉成 Blocks，Source 的任務就完成了。
+//
+// 替換方式：只需要把下面 `const bookRepository = new MemoryRepository();`
+// 這一行，改成 `new SupabaseRepository(supabaseClient)`，其他所有呼叫
+// bookRepository.xxx() 的程式碼完全不用修改。
+// ============================================================
+class BookRepository {
+  async listBooks() { throw new Error('Not implemented'); }
+  async saveBook(book) { throw new Error('Not implemented'); }
+  async loadBook(bookId) { throw new Error('Not implemented'); }
+  async deleteBook(bookId) { throw new Error('Not implemented'); }
+  async renameBook(bookId, newTitle) { throw new Error('Not implemented'); }
+
+  async savePage(bookId, pageNumber, blocks) { throw new Error('Not implemented'); }
+  async deletePage(bookId, pageNumber) { throw new Error('Not implemented'); }
+
+  getPageHtml(blocks) { throw new Error('Not implemented'); }
+
+  async loadUserSettings() { throw new Error('Not implemented'); }
+  async saveUserSettings(settings) { throw new Error('Not implemented'); }
+
+  async countBooks() { throw new Error('Not implemented'); }
+}
+
+/**
+ * Blocks → HTML 轉換，唯一出處。
+ * 不管是 MemoryRepository 還是未來的 SupabaseRepository，都呼叫同一份邏輯，
+ * 確保「同一組 Blocks，永遠產生同一份 HTML」。
+ */
+function blocksToHtml(blocks) {
+  return blocks.map(b => {
+    const tag = b.type === 'heading' ? 'h2' : 'p';
+    const escaped = b.text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    return `<${tag} data-block-id="${b.id}">${escaped}</${tag}>`;
+  }).join('\n');
+}
+
+class MemoryRepository extends BookRepository {
+  constructor() {
+    super();
+    this._books = new Map();   // bookId -> { id, title, cover, createdAt, updatedAt }
+    this._pages = new Map();   // bookId -> [{ pageNumber, blocks }]（陣列順序即頁碼順序）
+    this._userSettings = { fontSize: 100, playbackRate: 1.0 };
+  }
+
+  async listBooks() {
+    return Array.from(this._books.values())
+      .map(b => ({
+        id: b.id,
+        title: b.title,
+        cover: b.cover ?? null,
+        totalPages: (this._pages.get(b.id) || []).length,
+        updatedAt: b.updatedAt,
+      }))
+      .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+  }
+
+  async saveBook(book) {
+    const now = new Date().toISOString();
+    const existing = this._books.get(book.id);
+    const saved = {
+      id: book.id,
+      title: book.title,
+      cover: book.cover ?? existing?.cover ?? null,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now,
+    };
+    this._books.set(book.id, saved);
+    if (!this._pages.has(book.id)) {
+      this._pages.set(book.id, []);
+    }
+    return saved;
+  }
+
+  async loadBook(bookId) {
+    const book = this._books.get(bookId);
+    if (!book) throw new Error(`找不到教材 (id=${bookId})`);
+    const pages = this._pages.get(bookId) || [];
+    return {
+      ...book,
+      pages: pages.map(p => ({ pageNumber: p.pageNumber, blocks: p.blocks })),
+    };
+  }
+
+  async deleteBook(bookId) {
+    this._books.delete(bookId);
+    this._pages.delete(bookId);
+  }
+
+  async renameBook(bookId, newTitle) {
+    const book = this._books.get(bookId);
+    if (!book) throw new Error(`找不到教材 (id=${bookId})`);
+    book.title = newTitle;
+    book.updatedAt = new Date().toISOString();
+  }
+
+  async savePage(bookId, pageNumber, blocks) {
+    const pages = this._pages.get(bookId);
+    if (!pages) throw new Error(`找不到教材 (id=${bookId})`);
+    const existing = pages.find(p => p.pageNumber === pageNumber);
+    if (existing) {
+      existing.blocks = blocks;
+    } else {
+      pages.push({ pageNumber, blocks });
+      pages.sort((a, b) => a.pageNumber - b.pageNumber);
+    }
+    const book = this._books.get(bookId);
+    if (book) book.updatedAt = new Date().toISOString();
+  }
+
+  async deletePage(bookId, pageNumber) {
+    const pages = this._pages.get(bookId);
+    if (!pages) throw new Error(`找不到教材 (id=${bookId})`);
+
+    const index = pages.findIndex(p => p.pageNumber === pageNumber);
+    if (index === -1) throw new Error(`找不到頁面 (pageNumber=${pageNumber})`);
+
+    pages.splice(index, 1);
+    // 維護頁碼連續性：刪除後，重新排成 1..N
+    pages.forEach((p, i) => { p.pageNumber = i + 1; });
+
+    const book = this._books.get(bookId);
+    if (book) book.updatedAt = new Date().toISOString();
+  }
+
+  getPageHtml(blocks) {
+    return blocksToHtml(blocks);
+  }
+
+  async loadUserSettings() {
+    return { ...this._userSettings };
+  }
+
+  async saveUserSettings(settings) {
+    this._userSettings = { ...this._userSettings, ...settings };
+  }
+
+  async countBooks() {
+    return this._books.size;
+  }
+}
+
+/**
+ * SupabaseRepository — 正式資料層實作
+ *
+ * 依照已 Freeze 的 Schema（books / pages / user_settings）與
+ * 已驗證的 BookRepository 介面實作，UI、Editor、Reading、Book Creation
+ * 完全不需要修改，只需要把 MemoryRepository 換成這個類別即可生效。
+ */
+class SupabaseRepository extends BookRepository {
+  constructor(supabaseClient) {
+    super();
+    this.client = supabaseClient;
+  }
+
+  async _getUserId() {
+    const { data, error } = await this.client.auth.getUser();
+    if (error) throw error;
+    if (!data?.user) throw new Error('尚未登入，無法存取教材');
+    return data.user.id;
+  }
+
+  async listBooks() {
+    const userId = await this._getUserId();
+
+    const { data: books, error } = await this.client
+      .from('books')
+      .select('id, title, cover, updated_at')
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: false });
+
+    if (error) throw error;
+    if (!books || books.length === 0) return [];
+
+    const bookIds = books.map(b => b.id);
+    const { data: pageCounts, error: pageError } = await this.client
+      .from('pages')
+      .select('book_id')
+      .in('book_id', bookIds);
+
+    if (pageError) throw pageError;
+
+    const countMap = {};
+    for (const row of pageCounts || []) {
+      countMap[row.book_id] = (countMap[row.book_id] || 0) + 1;
+    }
+
+    return books.map(b => ({
+      id: b.id,
+      title: b.title,
+      cover: b.cover,
+      totalPages: countMap[b.id] || 0,
+      updatedAt: b.updated_at,
+    }));
+  }
+
+  async saveBook(book) {
+    const userId = await this._getUserId();
+
+    const { data, error } = await this.client
+      .from('books')
+      .upsert({
+        id: book.id,
+        user_id: userId,
+        title: book.title,
+        cover: book.cover ?? null,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+    return {
+      id: data.id,
+      title: data.title,
+      cover: data.cover,
+      createdAt: data.created_at,
+      updatedAt: data.updated_at,
+    };
+  }
+
+  async loadBook(bookId) {
+    const { data: book, error } = await this.client
+      .from('books')
+      .select('id, title, cover, created_at, updated_at')
+      .eq('id', bookId)
+      .single();
+
+    if (error) throw error;
+    if (!book) throw new Error(`找不到教材 (id=${bookId})`);
+
+    const { data: pages, error: pagesError } = await this.client
+      .from('pages')
+      .select('page_number, blocks')
+      .eq('book_id', bookId)
+      .order('page_number', { ascending: true });
+
+    if (pagesError) throw pagesError;
+
+    return {
+      id: book.id,
+      title: book.title,
+      cover: book.cover,
+      createdAt: book.created_at,
+      updatedAt: book.updated_at,
+      pages: (pages || []).map(p => ({ pageNumber: p.page_number, blocks: p.blocks })),
+    };
+  }
+
+  async deleteBook(bookId) {
+    const { error } = await this.client.from('books').delete().eq('id', bookId);
+    if (error) throw error;
+  }
+
+  async renameBook(bookId, newTitle) {
+    const { error } = await this.client
+      .from('books')
+      .update({ title: newTitle })
+      .eq('id', bookId);
+    if (error) throw error;
+  }
+
+  async savePage(bookId, pageNumber, blocks) {
+    const { error } = await this.client
+      .from('pages')
+      .upsert({
+        book_id: bookId,
+        page_number: pageNumber,
+        blocks,
+      }, { onConflict: 'book_id,page_number' });
+
+    if (error) throw error;
+
+    await this._touchBook(bookId);
+  }
+
+  /**
+   * 借一次無實質內容變更的 UPDATE，觸發 set_updated_at trigger，
+   * 讓 books.updated_at 反映「這本書最近被編輯過」（My Magic Books 排序依據）。
+   * 用於 pages 改變、但 books 本身欄位沒有變動的情境。
+   */
+  async _touchBook(bookId) {
+    const { data: current, error: fetchError } = await this.client
+      .from('books')
+      .select('title')
+      .eq('id', bookId)
+      .single();
+    if (fetchError) throw fetchError;
+
+    const { error } = await this.client
+      .from('books')
+      .update({ title: current.title })
+      .eq('id', bookId);
+    if (error) throw error;
+  }
+
+  async deletePage(bookId, pageNumber) {
+    const { error: deleteError } = await this.client
+      .from('pages')
+      .delete()
+      .eq('book_id', bookId)
+      .eq('page_number', pageNumber);
+
+    if (deleteError) throw deleteError;
+
+    const { data: remainingPages, error: fetchError } = await this.client
+      .from('pages')
+      .select('id, page_number')
+      .eq('book_id', bookId)
+      .order('page_number', { ascending: true });
+
+    if (fetchError) throw fetchError;
+
+    for (let i = 0; i < (remainingPages || []).length; i++) {
+      const page = remainingPages[i];
+      const correctPageNumber = i + 1;
+      if (page.page_number !== correctPageNumber) {
+        const { error: updateError } = await this.client
+          .from('pages')
+          .update({ page_number: correctPageNumber })
+          .eq('id', page.id);
+        if (updateError) throw updateError;
+      }
+    }
+
+    await this._touchBook(bookId);
+  }
+
+  getPageHtml(blocks) {
+    return blocksToHtml(blocks);
+  }
+
+  async loadUserSettings() {
+    const userId = await this._getUserId();
+
+    const { data, error } = await this.client
+      .from('user_settings')
+      .select('font_size, playback_rate')
+      .eq('user_id', userId)
+      .single();
+
+    if (error) throw error;
+    return {
+      fontSize: data.font_size,
+      playbackRate: data.playback_rate,
+    };
+  }
+
+  async saveUserSettings(settings) {
+    const userId = await this._getUserId();
+
+    const updatePayload = { user_id: userId };
+    if ('fontSize' in settings) updatePayload.font_size = settings.fontSize;
+    if ('playbackRate' in settings) updatePayload.playback_rate = settings.playbackRate;
+
+    const { error } = await this.client
+      .from('user_settings')
+      .upsert(updatePayload, { onConflict: 'user_id' });
+
+    if (error) throw error;
+  }
+
+  async countBooks() {
+    const userId = await this._getUserId();
+
+    const { count, error } = await this.client
+      .from('books')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId);
+
+    if (error) throw error;
+    return count || 0;
+  }
+}
+
+// 正式資料層：使用 SupabaseRepository。MemoryRepository 仍保留在上方，
+// 若需要離線測試或快速原型驗證，只需把下面這行換回 new MemoryRepository()。
+const bookRepository = new SupabaseRepository(supabaseClient);
+
+/**
+ * 會員教材數量限制（對應 Feature Design：免費會員 3 本／基本會員 20 本）。
+ * MVP 先固定視為免費會員，之後接會員系統時，這個值改成讀取真實會員等級。
+ */
+const MAX_BOOKS_FOR_CURRENT_PLAN = 3;
+
+
+
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  // 步驟指示器只在「正在操作一本書」的流程中才顯示，首頁不需要
+  document.getElementById('stepper').style.display = (id === 'screen-mybooks') ? 'none' : 'flex';
+}
+
+// ============================================================
+// 畫面 0：我的魔法書（首頁）
+// ============================================================
+async function renderMyBooksScreen() {
+  const books = await bookRepository.listBooks();
+  const bookCount = await bookRepository.countBooks();
+  const listEl = document.getElementById('mybooksList');
+  const quotaEl = document.getElementById('mybooksQuota');
+
+  quotaEl.textContent = `已建立 ${bookCount} / ${MAX_BOOKS_FOR_CURRENT_PLAN} 本教材`;
+  quotaEl.classList.toggle('full', bookCount >= MAX_BOOKS_FOR_CURRENT_PLAN);
+
+  if (books.length === 0) {
+    listEl.innerHTML = '<div class="mybooks-empty">還沒有教材，點選「＋ 新增教材」開始建立第一本。</div>';
+    return;
+  }
+
+  // listBooks() 已經依最後修改時間排序，不需要在這裡重新排序
+  listEl.innerHTML = books.map(book => `
+    <div class="book-card" data-book-id="${book.id}">
+      <div class="book-icon">📖</div>
+      <div class="book-title">${escapeHtmlAttr(book.title)}</div>
+      <div class="book-meta">共 ${book.totalPages} 頁 · 最後修改 ${formatRelativeDate(book.updatedAt)}</div>
+      <div class="book-actions">
+        <button data-action="rename" data-book-id="${book.id}">重新命名</button>
+        <button data-action="delete" data-book-id="${book.id}" class="danger">刪除</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function escapeHtmlAttr(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function formatRelativeDate(isoString) {
+  const diffMs = Date.now() - new Date(isoString).getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return '剛剛';
+  if (diffMin < 60) return `${diffMin} 分鐘前`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr} 小時前`;
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffDay < 30) return `${diffDay} 天前`;
+  return new Date(isoString).toLocaleDateString('zh-TW');
+}
+
+// 點擊書本卡片本身 → 開啟教材（進閱讀模式）；點擊卡片內的按鈕 → 各自的動作，不要連動觸發開啟
+document.getElementById('mybooksList').addEventListener('click', async (e) => {
+  const actionBtn = e.target.closest('button[data-action]');
+  if (actionBtn) {
+    e.stopPropagation();
+    const bookId = actionBtn.dataset.bookId;
+    const action = actionBtn.dataset.action;
+    if (action === 'rename') {
+      await handleRenameBook(bookId);
+    } else if (action === 'delete') {
+      await handleDeleteBook(bookId);
+    }
+    return;
+  }
+  const card = e.target.closest('.book-card');
+  if (card) {
+    await openBookForReading(card.dataset.bookId);
+  }
+});
+
+async function handleRenameBook(bookId) {
+  const book = await bookRepository.loadBook(bookId);
+  const newTitle = prompt('教材名稱：', book.title);
+  if (newTitle === null) return; // 使用者取消
+  const trimmed = newTitle.trim();
+  if (!trimmed) return;
+  await bookRepository.renameBook(bookId, trimmed);
+  await renderMyBooksScreen();
+}
+
+async function handleDeleteBook(bookId) {
+  const book = await bookRepository.loadBook(bookId);
+  const confirmed = confirm(`確定要刪除「${book.title}」嗎？刪除後無法復原。`);
+  if (!confirmed) return;
+  await bookRepository.deleteBook(bookId);
+  await renderMyBooksScreen();
+}
+
+/**
+ * 開啟一本已存在的教材 —— 不需要重新轉換、重新 OCR、重新貼文字。
+ * 直接從 Repository 載入已經存好的 pages（Blocks），Repository 不需要、
+ * 也不知道這些 Blocks 原本來自哪一種來源（PDF／Word／直接輸入等）。
+ */
+async function openBookForReading(bookId) {
+  const book = await bookRepository.loadBook(bookId);
+  state.currentBookId = book.id;
+  state.materialName = book.title;
+  state.pages = book.pages;
+
+  renderStepper(3);
+  document.getElementById('readTitle').textContent = state.materialName;
+  showScreen('screen-read');
+  state.currentReadPage = 1;
+  await renderReadPage(1);
+}
+
+document.getElementById('goToAddBookBtn').addEventListener('click', async () => {
+  const bookCount = await bookRepository.countBooks();
+  if (bookCount >= MAX_BOOKS_FOR_CURRENT_PLAN) {
+    alert(`目前方案最多可建立 ${MAX_BOOKS_FOR_CURRENT_PLAN} 本教材。\n\n請先刪除不需要的教材，再建立新的教材。`);
+    return;
+  }
+  showScreen('screen-source-select');
+});
+
+document.getElementById('backToMyBooksFromSourceBtn').addEventListener('click', async () => {
+  showScreen('screen-mybooks');
+  await renderMyBooksScreen();
+});
+
+document.getElementById('backToMyBooksBtn').addEventListener('click', async () => {
+  showScreen('screen-source-select');
+});
+
+/**
+ * Book Creation — 選擇建立方式
+ * 七種建立方式並列、地位平等，全部都能進入同一個 Editor。
+ * 目前文字擷取能力的完成度不同（PDF／圖片已有真正的 OCR；
+ * Word／PowerPoint／網址先用占位內容頂著入口，TXT 直接讀取檔案內容），
+ * 但流程本身—— Book Creation → Editor → Repository → Reading —— 完全一致，
+ * 之後逐步把占位內容換成真正的文字擷取邏輯，不需要改動流程或畫面結構。
+ */
+let pendingSource = null; // 記錄目前正在走哪一種來源，給共用畫面（檔案上傳）使用
+
+document.querySelectorAll('.source-option').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const source = btn.dataset.source;
+    pendingSource = source;
+
+    if (source === 'pdf') {
+      showScreen('screen-library');
+    } else if (source === 'manual') {
+      await startManualBookCreation();
+    } else if (source === 'url') {
+      showScreen('screen-url-input');
+    } else {
+      showFileUploadScreen(source);
+    }
+  });
+});
+
+/**
+ * Word／PowerPoint／TXT／圖片 共用同一個「選擇檔案」畫面，
+ * 只是依來源調整標題、說明文字與接受的檔案類型。
+ */
+const FILE_SOURCE_CONFIG = {
+  word:       { title: '📝 上傳 Word',       desc: '選擇 .docx 檔案，系統會嘗試取得文字內容', accept: '.doc,.docx', icon: '📝' },
+  powerpoint: { title: '📊 上傳 PowerPoint', desc: '選擇 .pptx 檔案，系統會嘗試取得文字內容', accept: '.ppt,.pptx', icon: '📊' },
+  txt:        { title: '📄 上傳 TXT',        desc: '選擇 .txt 檔案，直接載入文字內容',       accept: '.txt',       icon: '📄' },
+  image:      { title: '🖼 上傳圖片',        desc: '選擇圖片，系統會嘗試辨識圖片中的文字',   accept: 'image/*',   icon: '🖼' },
+};
+
+function showFileUploadScreen(source) {
+  const config = FILE_SOURCE_CONFIG[source];
+  document.getElementById('fileUploadTitle').textContent = config.title;
+  document.getElementById('fileUploadDesc').textContent = config.desc;
+  document.getElementById('genericUploadIcon').textContent = config.icon;
+  document.getElementById('genericFileInput').accept = config.accept;
+  document.getElementById('genericUploadZoneText').textContent = '點擊選擇檔案，或拖曳到此處';
+  document.getElementById('genericNameInputRow').classList.remove('show');
+  genericSelectedFile = null;
+  showScreen('screen-file-upload');
+}
+
+let genericSelectedFile = null;
+
+document.getElementById('genericUploadZone').addEventListener('click', () => {
+  document.getElementById('genericFileInput').click();
+});
+document.getElementById('genericFileInput').addEventListener('change', (e) => {
+  handleGenericFileSelected(e.target.files[0]);
+});
+
+function handleGenericFileSelected(file) {
+  if (!file) return;
+  genericSelectedFile = file;
+  document.getElementById('genericUploadZoneText').textContent = `已選擇：${file.name}`;
+  document.getElementById('genericMaterialNameInput').value = file.name.replace(/\.[^.]+$/, '');
+  document.getElementById('genericNameInputRow').classList.add('show');
+}
+
+document.getElementById('backToSourceFromFileBtn').addEventListener('click', () => {
+  showScreen('screen-source-select');
+});
+document.getElementById('backToSourceFromUrlBtn').addEventListener('click', () => {
+  showScreen('screen-source-select');
+});
+
+document.getElementById('genericAddMaterialBtn').addEventListener('click', async () => {
+  const title = document.getElementById('genericMaterialNameInput').value || '未命名教材';
+  const blocks = await acquireTextForSource(pendingSource, genericSelectedFile);
+  await createBookFromBlocks(title, blocks);
+});
+
+document.getElementById('urlAddMaterialBtn').addEventListener('click', async () => {
+  const url = document.getElementById('urlInput').value.trim();
+  if (!url) {
+    alert('請輸入網址');
+    return;
+  }
+  const title = document.getElementById('urlMaterialNameInput').value || '未命名教材';
+  const blocks = await acquireTextForSource('url', url);
+  await createBookFromBlocks(title, blocks);
+});
+
+/**
+ * 依來源取得文字，回傳 Block 陣列。
+ * 這是「Text Acquisition」這一步目前的統一出口 —— 之後每種來源真正的
+ * 取得文字邏輯（解析 Word／PowerPoint／網頁，或更準確的 OCR）都會在這裡
+ * 逐步補完，呼叫端（建立教材的流程）完全不需要跟著改動。
+ */
+async function acquireTextForSource(source, fileOrUrl) {
+  if (source === 'txt') {
+    // TXT 不需要假資料：直接讀取檔案內容即可
+    const text = await fileOrUrl.text();
+    return pastedTextToBlocks(text, 1);
+  }
+
+  if (source === 'image') {
+    // 圖片：沿用已經驗證過的 OCR 流程，對單張圖片直接辨識
+    const worker = await getOcrWorker();
+    const bitmap = await createImageBitmap(fileOrUrl);
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    const { data } = await worker.recognize(canvas);
+    // 沿用「貼上文字」的切分邏輯（依空行分段），單張圖片辨識出來的文字通常不多，
+    // 這個切分規則已經驗證過，不需要另外維護一套圖片專用的切分邏輯。
+    return pastedTextToBlocks(data.text, 1);
+  }
+
+  if (source === 'word' || source === 'powerpoint') {
+    // 尚未實作真正的文件解析：先用占位內容頂著入口，
+    // 讓整條 Book Creation → Editor → Repository → Reading 的流程可以被驗證。
+    const label = source === 'word' ? 'Word' : 'PowerPoint';
+    return [{
+      id: `p1-b-${Date.now()}`,
+      type: 'text',
+      text: `（${label} 文字擷取功能開發中。已選擇檔案：${fileOrUrl.name}，請先手動輸入內容。）`,
+    }];
+  }
+
+  if (source === 'url') {
+    // 尚未實作真正的網頁文字擷取：先用占位內容頂著入口
+    return [{
+      id: `p1-b-${Date.now()}`,
+      type: 'text',
+      text: `（網址文字擷取功能開發中。網址：${fileOrUrl}，請先手動輸入內容。）`,
+    }];
+  }
+
+  return [{ id: `p1-b-${Date.now()}`, type: 'text', text: '' }];
+}
+
+/**
+ * 建立教材的共用收尾邏輯：不管文字是怎麼取得的，
+ * 一旦變成 Blocks，後面的流程（存進 Repository、進入 Editor）完全一致。
+ */
+async function createBookFromBlocks(title, blocks) {
+  state.materialName = title;
+  state.currentBookId = `book-${Date.now()}`;
+  state.pdfDoc = null;
+  state.pages = [{ pageNumber: 1, blocks }];
+
+  await bookRepository.saveBook({ id: state.currentBookId, title: state.materialName });
+  await bookRepository.savePage(state.currentBookId, 1, blocks);
+
+  renderStepper(2);
+  state.currentEditPage = 1;
+  document.getElementById('editTitle').textContent = state.materialName;
+  showScreen('screen-edit');
+  await renderEditPage(1);
+}
+
+/**
+ * 「直接開始編輯」—— 不需要上傳任何檔案、不需要取得文字。
+ * 立即建立教材記錄、建立第一個空白 Block，直接進入 Editor，
+ * 老師立即可以開始輸入，不應出現任何中介步驟或等待畫面。
+ */
+async function startManualBookCreation() {
+  await createBookFromBlocks('未命名教材', [{ id: `p1-b-${Date.now()}`, type: 'text', text: '' }]);
+  focusLastTextarea(document.getElementById('editBlocks'));
+}
+
+// ============================================================
+// 畫面 1：新增教材
+// ============================================================
+const uploadZone = document.getElementById('uploadZone');
+const fileInput = document.getElementById('fileInput');
+const nameInputRow = document.getElementById('nameInputRow');
+const materialNameInput = document.getElementById('materialNameInput');
+const addMaterialBtn = document.getElementById('addMaterialBtn');
+
+let selectedFile = null;
+
+function handleSelectedFile(file) {
+  if (!file) return;
+  if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+    document.getElementById('loadError').style.display = 'block';
+    document.getElementById('loadError').innerHTML = '<strong>請上傳 PDF 檔案</strong>（目前 v1 僅支援 PDF 來源）';
+    return;
+  }
+  document.getElementById('loadError').style.display = 'none';
+  selectedFile = file;
+  document.getElementById('uploadZoneText').textContent = `已選擇：${file.name}`;
+  materialNameInput.value = file.name.replace(/\.pdf$/i, '');
+  nameInputRow.classList.add('show');
+}
+
+// 點擊上傳
+uploadZone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', (e) => handleSelectedFile(e.target.files[0]));
+
+// 拖曳上傳
+['dragenter', 'dragover'].forEach(eventName => {
+  uploadZone.addEventListener(eventName, (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    uploadZone.classList.add('drag-over');
+  });
+});
+['dragleave', 'dragend'].forEach(eventName => {
+  uploadZone.addEventListener(eventName, (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    uploadZone.classList.remove('drag-over');
+  });
+});
+uploadZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  uploadZone.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  handleSelectedFile(file);
+});
+// 防止瀏覽器把拖進整個視窗的檔案直接開啟（離開 app 畫面）
+['dragover', 'drop'].forEach(eventName => {
+  window.addEventListener(eventName, (e) => {
+    if (e.target !== uploadZone && !uploadZone.contains(e.target)) {
+      e.preventDefault();
+    }
+  });
+});
+
+addMaterialBtn.addEventListener('click', async () => {
+  state.materialName = materialNameInput.value || '未命名教材';
+  state.currentBookId = `book-${Date.now()}`; // 新教材的識別碼，存檔時會用到
+  renderStepper(1);
+  showScreen('screen-converting');
+  try {
+    const arrayBuffer = await selectedFile.arrayBuffer();
+    state.pendingPdfBytes = new Uint8Array(arrayBuffer); // 暫存，僅供本地渲染左側 PDF 畫面用，不存進 Repository
+    await convertMaterial(state.pendingPdfBytes);
+  } catch (err) {
+    console.error('轉換過程發生錯誤:', err);
+    setConvertStatus('轉換失敗');
+    logConvert('❌ 錯誤：' + err.message);
+    logConvert('請檢查瀏覽器 Console 取得詳細錯誤訊息');
+  }
+});
+
+// ============================================================
+// 畫面 2：教材轉換流程（自動判斷 PDF.js / OCR）
+// ============================================================
+function logConvert(msg) {
+  const log = document.getElementById('convertingLog');
+  const line = document.createElement('div');
+  line.textContent = msg;
+  log.appendChild(line);
+}
+function setConvertStatus(msg) {
+  document.getElementById('convertingStatus').textContent = msg;
+}
+
+// ============================================================
+// 教材轉換：上傳完成後，只需確認頁數即可進入編輯模式。
+// 真正的文字辨識（OCR）改成「翻到哪一頁，才對那一頁執行」，
+// 對應 PRD 流程：每翻到一頁 → OCR 擷取該頁文字 → 切成多個 Block → 出現在編輯區。
+// ============================================================
+async function convertMaterial(pdfData) {
+  setConvertStatus('讀取教材檔案...');
+  const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
+  state.pdfDoc = pdf;
+  logConvert(`共 ${pdf.numPages} 頁`);
+
+  // 每一頁先建立空的頁面資料結構，blocks 留空，翻到該頁時才執行 OCR 填入。
+  // originalPdfPage 記錄這一頁對應到原始 PDF 的哪一頁 —— 教材頁碼（pageNumber）
+  // 之後可能因為「刪除本頁」而重新排序，但 originalPdfPage 讓系統永遠知道
+  // 該去 PDF 的哪一頁渲染畫面、跑 OCR，兩者是分開的兩個編號系統。
+  state.pages = Array.from({ length: pdf.numPages }, (_, idx) => ({
+    pageNumber: idx + 1,
+    originalPdfPage: idx + 1,
+    blocks: null, // null 代表尚未執行 OCR
+  }));
+
+  setConvertStatus('準備完成，進入編輯模式...');
+  await new Promise(r => setTimeout(r, 300));
+
+  // 先在 Repository 建立這本書的記錄，後續每一頁的儲存才有對象可以存進去
+  await bookRepository.saveBook({
+    id: state.currentBookId,
+    title: state.materialName,
+  });
+
+  renderStepper(2);
+  state.currentEditPage = 1;
+  document.getElementById('editTitle').textContent = state.materialName;
+  showScreen('screen-edit');
+  await renderEditPage(1);
+}
+
+/**
+ * MVP 計價規則：固定費率，1 頁 = 1 點。
+ * 不依圖片大小或內容浮動計算，老師看到的數字永遠單純、可預期。
+ */
+const POINTS_PER_PAGE = 1;
+
+function estimatePointsForPage() {
+  return POINTS_PER_PAGE;
+}
+
+/**
+ * 自行建立（免費）：不執行任何 OCR，給一個空白的 Block，
+ * 老師自己輸入文字。不消耗任何點數。
+ */
+function createManualBlankBlocks(pageNumber) {
+  return [{ id: `p${pageNumber}-b1`, type: 'text', text: '' }];
+}
+
+/**
+ * 把單個段落（paragraph）的 bbox 從原圖裁出來，做成一張乾淨的小畫布。
+ * 裁切時留一點邊界（padding），避免文字貼著邊緣被切掉造成誤判。
+ */
+function cropRegionToCanvas(sourceCanvas, bbox, padding = 6) {
+  const x0 = Math.max(0, bbox.x0 - padding);
+  const y0 = Math.max(0, bbox.y0 - padding);
+  const x1 = Math.min(sourceCanvas.width, bbox.x1 + padding);
+  const y1 = Math.min(sourceCanvas.height, bbox.y1 + padding);
+  const w = x1 - x0;
+  const h = y1 - y0;
+  if (w <= 0 || h <= 0) return null;
+
+  const cropped = document.createElement('canvas');
+  cropped.width = w;
+  cropped.height = h;
+  cropped.getContext('2d').drawImage(sourceCanvas, x0, y0, w, h, 0, 0, w, h);
+  return cropped;
+}
+
+/**
+ * 把一個段落的多行文字，合併成一段乾淨的文字（去除 Tesseract 換行造成的破碎）。
+ */
+function cleanParagraphText(rawText) {
+  return rawText
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
+    .join(' ')
+    .trim();
+}
+
+/**
+ * 把多個段落的 OCR 結果，轉成 Block 陣列。
+ * 依「字數少 + 在頁面靠上方」簡單判斷是否為標題，其餘視為正文。
+ */
+function paragraphsToBlocks(paragraphResults, pageNumber) {
+  const valid = paragraphResults.filter(p => p.text && p.text.length > 0);
+
+  if (valid.length === 0) {
+    return [{ id: `p${pageNumber}-b1`, type: 'text', text: '（這一頁沒有偵測到文字，請手動輸入或檢查左側原始教材）' }];
+  }
+
+  return valid.map((p, idx) => ({
+    id: `p${pageNumber}-b${idx + 1}`,
+    type: (idx === 0 && p.text.length <= 30) ? 'heading' : 'text',
+    text: p.text,
+  }));
+}
+
+/**
+ * 對指定頁碼執行 OCR — 兩階段流程：
+ *
+ *   1. 版面分析：對整頁圖片做一次 OCR，目的不是拿文字結果，
+ *      而是利用 Tesseract 回傳的 paragraphs 座標，找出「文字實際在哪裡」。
+ *   2. 裁切重辨識：依照每個段落的座標，從原圖裁出乾淨的小圖（不含插畫/背景），
+ *      對這張裁切後的小圖重新做一次 OCR，取得準確得多的辨識結果。
+ *
+ * 這對應 PRD 流程：PDF → 找出文字區域 → 只裁切文字區 → OCR → Block
+ */
+async function runOcrForPage(pageNum) {
+  const pageData = state.pages.find(p => p.pageNumber === pageNum);
+  const page = await state.pdfDoc.getPage(pageData.originalPdfPage);
+  const viewport = page.getViewport({ scale: 2 });
+
+  const fullPageCanvas = document.createElement('canvas');
+  fullPageCanvas.width = viewport.width;
+  fullPageCanvas.height = viewport.height;
+  await page.render({ canvasContext: fullPageCanvas.getContext('2d'), viewport }).promise;
+
+  const worker = await getOcrWorker();
+
+  // 第一階段：版面分析，取得段落座標（不使用這次的文字結果，只取座標）
+  const { data: layoutData } = await worker.recognize(fullPageCanvas);
+  const paragraphs = (layoutData.blocks || [])
+    .flatMap(block => block.paragraphs || [])
+    .filter(p => p.bbox); // 只保留有座標的段落
+
+  if (paragraphs.length === 0) {
+    // 版面分析完全沒找到文字區域：直接用整頁結果的文字（總比什麼都沒有好）
+    const fallbackText = cleanParagraphText(layoutData.text || '');
+    const blocks = fallbackText
+      ? [{ id: `p${pageNum}-b1`, type: 'text', text: fallbackText }]
+      : [{ id: `p${pageNum}-b1`, type: 'text', text: '（這一頁沒有偵測到文字，請手動輸入或檢查左側原始教材）' }];
+    state.pages.find(p => p.pageNumber === pageNum).blocks = blocks;
+    return blocks;
+  }
+
+  // 第二階段：對每個段落區域，裁切後重新 OCR
+  const paragraphResults = [];
+  for (const para of paragraphs) {
+    const croppedCanvas = cropRegionToCanvas(fullPageCanvas, para.bbox);
+    if (!croppedCanvas) continue;
+
+    const { data } = await worker.recognize(croppedCanvas);
+    const text = cleanParagraphText(data.text);
+    if (text) {
+      paragraphResults.push({ text, bbox: para.bbox });
+    }
+  }
+
+  const blocks = paragraphsToBlocks(paragraphResults, pageNum);
+  state.pages.find(p => p.pageNumber === pageNum).blocks = blocks;
+  return blocks;
+}
+
+// ============================================================
+// 畫面 3：編輯模式
+// ============================================================
+async function renderEditPage(pageNum) {
+  state.currentEditPage = pageNum;
+  const pageData = state.pages.find(p => p.pageNumber === pageNum);
+
+  const pdfPane = document.querySelector('#screen-edit .pdf-pane');
+  if (state.pdfDoc && pageData.originalPdfPage) {
+    pdfPane.style.display = '';
+    const page = await state.pdfDoc.getPage(pageData.originalPdfPage);
+    const viewport = page.getViewport({ scale: 1.5 });
+    const canvas = document.getElementById('editPdfCanvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+  } else {
+    // 「直接開始編輯」沒有原始來源檔案，左側不顯示 PDF 畫面，
+    // 對應 Editor Feature Design：純文字教材預設使用純文字模式（全寬）。
+    pdfPane.style.display = 'none';
+  }
+
+  document.getElementById('editPageIndicator').textContent = `第 ${pageNum} / ${state.pages.length} 頁`;
+  document.getElementById('editPrevBtn').disabled = pageNum <= 1;
+  document.getElementById('editNextBtn').disabled = pageNum >= state.pages.length;
+
+  const container = document.getElementById('editBlocks');
+
+  // 這一頁還沒建立過內容：顯示「AI 幫忙建立／自己手動建立」選擇畫面，
+  // 不自動執行任何 OCR。只有使用者明確選擇後才會有對應動作。
+  if (pageData.blocks === null) {
+    showBuildChoiceForPage(pageNum, container);
+    return;
+  }
+
+  renderBlocksIntoContainer(pageData.blocks, container, pageNum);
+}
+
+/**
+ * 顯示「這一頁該怎麼建立內容」的選擇畫面。
+ * 對應 PRD：圖片型教材建立流程 — AI 自動辨識（扣點）／自行建立（免費），由使用者選擇。
+ * 文案以老師的角度描述，不出現技術細節（OCR、token、AI 模型等字眼）。
+ */
+function showBuildChoiceForPage(pageNum, container) {
+  const points = estimatePointsForPage();
+
+  container.innerHTML = `
+    <div class="build-choice">
+      <div class="build-choice-title">這一頁還沒有文字內容</div>
+      <div class="build-choice-desc">這份教材這一頁是圖片，沒有現成的文字。請選擇要怎麼把文字建立起來：</div>
+
+      <div class="build-choice-option">
+        <div class="build-choice-option-header">
+          <strong>🤖 讓 AI 幫我打好文字</strong>
+          <span class="points-badge">${points} 點／頁</span>
+        </div>
+        <div class="build-choice-option-desc">AI 會自動讀出這一頁的文字，並幫你分好段落，你只需要檢查一下、修正小錯字就好，省下大部分輸入的時間。</div>
+        <button class="primary-btn" id="startAiRecognizeBtn">讓 AI 幫忙建立（${points} 點）</button>
+      </div>
+
+      <div class="build-choice-option">
+        <div class="build-choice-option-header">
+          <strong>✏️ 自己輸入</strong>
+          <span class="points-badge free">免費</span>
+        </div>
+        <div class="build-choice-option-desc">打開一個空白欄位，自己把這一頁的文字打進去。完全不花費點數。</div>
+        <button class="secondary-btn" id="startManualBuildBtn">自己輸入（免費）</button>
+      </div>
+
+      <div class="build-choice-option">
+        <div class="build-choice-option-header">
+          <strong>📋 貼上文字</strong>
+          <span class="points-badge free">免費</span>
+        </div>
+        <div class="build-choice-option-desc">將這一頁的文字貼上即可建立教材。</div>
+        <button class="secondary-btn" id="startPasteBuildBtn">貼上文字（免費）</button>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('startAiRecognizeBtn').addEventListener('click', async () => {
+    await runAiRecognitionForPage(pageNum, container);
+  });
+  document.getElementById('startManualBuildBtn').addEventListener('click', () => {
+    const pageData = state.pages.find(p => p.pageNumber === pageNum);
+    pageData.blocks = createManualBlankBlocks(pageNum);
+    pageData.buildMethod = 'manual';
+    renderBlocksIntoContainer(pageData.blocks, container, pageNum);
+    // 老師按下「自己輸入」後，下一秒就要能直接打字，不需要再點擊任何東西
+    focusLastTextarea(container);
+  });
+  document.getElementById('startPasteBuildBtn').addEventListener('click', () => {
+    showPasteTextScreen(pageNum, container);
+  });
+}
+
+/**
+ * 「貼上文字」畫面：給老師一個大型文字區，貼上既有文字後，
+ * 依空行自動切成多個 Block。這是「取得文字」的其中一種免費方法，
+ * 跟 AI OCR 地位平等，差別只是文字來源不同（老師已經自己準備好了文字）。
+ */
+function showPasteTextScreen(pageNum, container) {
+  container.innerHTML = `
+    <div class="build-choice">
+      <div class="build-choice-title">貼上這一頁的文字</div>
+      <div class="build-choice-desc">把你已經準備好的文字貼在下面，段落之間請空一行，系統會自動依空行切成多個 Block。</div>
+      <textarea id="pasteTextarea" class="paste-textarea" placeholder="在這裡貼上文字（Ctrl+V）…&#10;&#10;段落之間空一行，會自動切成不同的 Block"></textarea>
+      <button class="primary-btn" id="confirmPasteBtn">建立教材內容</button>
+      <button class="secondary-btn" id="cancelPasteBtn" style="margin-top:8px;">返回上一步</button>
+    </div>
+  `;
+
+  document.getElementById('pasteTextarea').focus();
+
+  document.getElementById('confirmPasteBtn').addEventListener('click', () => {
+    const rawText = document.getElementById('pasteTextarea').value;
+    const blocks = pastedTextToBlocks(rawText, pageNum);
+    const pageData = state.pages.find(p => p.pageNumber === pageNum);
+    pageData.blocks = blocks;
+    pageData.buildMethod = 'paste';
+    renderBlocksIntoContainer(blocks, container, pageNum);
+  });
+
+  document.getElementById('cancelPasteBtn').addEventListener('click', () => {
+    showBuildChoiceForPage(pageNum, container);
+  });
+}
+
+/**
+ * 把貼上的文字，依空行（段落）切成多個 Block。
+ * 跟 OCR 結果走到同一種資料結構，下游完全不需要知道這份內容是貼上來的還是 AI 辨識的。
+ */
+function pastedTextToBlocks(rawText, pageNumber) {
+  const paragraphs = rawText
+    .split(/\n\s*\n/) // 依空行分段
+    .map(p => p.trim())
+    .filter(p => p.length > 0);
+
+  if (paragraphs.length === 0) {
+    return createManualBlankBlocks(pageNumber);
+  }
+
+  return paragraphs.map((text, idx) => ({
+    id: `p${pageNumber}-b${idx + 1}`,
+    type: (idx === 0 && text.length <= 30) ? 'heading' : 'text',
+    text: text.replace(/\n/g, ' '), // 段落內若有換行，合併成一行
+  }));
+}
+
+/**
+ * 使用者確認「開始 AI 辨識」後，才真正執行 OCR。
+ * 這一步才會真正消耗點數（目前 MVP 階段先以畫面流程為主，
+ * 實際扣點與點數餘額檢查留待會員系統介接時一併處理）。
+ */
+async function runAiRecognitionForPage(pageNum, container) {
+  container.innerHTML = `
+    <div style="display:flex; align-items:center; gap:10px; color:#888; padding:20px 0;">
+      <div class="spinner" style="width:20px;height:20px;border-width:3px;margin:0;"></div>
+      AI 正在讀取這一頁的文字，請稍候...
+    </div>`;
+  const blocks = await runOcrForPage(pageNum);
+  const pageData = state.pages.find(p => p.pageNumber === pageNum);
+  pageData.buildMethod = 'ai';
+  renderBlocksIntoContainer(blocks, container, pageNum);
+}
+
+/**
+ * 把一組 Block 渲染成編輯區的可編輯元件，每個 Block 各自一個文字框。
+ * 這個函式是 AI 建立與手動建立共用的唯一編輯畫面 —— 兩者最後都進到這裡，
+ * 差別只在於「進來的時候，blocks 裡已經有幾筆內容」。
+ *
+ * 同時提供「＋ 新增 Block」「拆分」「與上合併」三個編輯工具，
+ * 讓老師可以自行調整段落結構，不需要依賴 AI 一次就切對。
+ */
+function renderBlocksIntoContainer(blocks, container, pageNum) {
+  const pageData = state.pages.find(p => p.pageNumber === pageNum);
+
+  function rerender() {
+    renderBlocksIntoContainer(pageData.blocks, container, pageNum);
+  }
+
+  container.innerHTML = '';
+
+  blocks.forEach((block, index) => {
+    const row = document.createElement('div');
+    row.className = 'block-row';
+
+    const controls = document.createElement('div');
+    controls.className = 'block-controls';
+    const splitBtn = document.createElement('button');
+    splitBtn.textContent = '拆分';
+    const mergeBtn = document.createElement('button');
+    mergeBtn.textContent = '與上合併';
+    mergeBtn.disabled = index === 0; // 第一個 Block 沒有「上面」可以合併
+    controls.appendChild(splitBtn);
+    controls.appendChild(mergeBtn);
+    row.appendChild(controls);
+
+    const textarea = document.createElement('textarea');
+    textarea.className = `editable-block ${block.type === 'heading' ? 'heading' : 'body'}`;
+    textarea.value = block.text;
+    // 給足夠的起始高度，讓老師感覺是在編輯一段教材內容，不是填一個小框；
+    // 內容變長時可用 CSS resize 手動拉大，或交給瀏覽器自動換行撐高。
+    textarea.rows = block.type === 'heading' ? 2 : Math.max(3, Math.ceil((block.text.length || 1) / 35));
+    textarea.placeholder = '在這裡輸入這一段的文字…';
+    textarea.dataset.blockId = block.id;
+    textarea.addEventListener('input', () => {
+      block.text = textarea.value;
+    });
+    row.appendChild(textarea);
+    container.appendChild(row);
+
+    // 拆分：以游標目前位置為界，把這個 Block 切成兩個
+    splitBtn.addEventListener('click', () => {
+      const cursorPos = textarea.selectionStart;
+      const before = block.text.slice(0, cursorPos).trim();
+      const after = block.text.slice(cursorPos).trim();
+      if (!after) return; // 游標在最後面，沒有東西可以拆分出去
+      block.text = before;
+      const newBlock = { id: `${block.id}-split-${Date.now()}`, type: 'text', text: after };
+      pageData.blocks.splice(index + 1, 0, newBlock);
+      rerender();
+    });
+
+    // 與上合併：把這個 Block 的文字接到上一個 Block 後面，自己消失
+    mergeBtn.addEventListener('click', () => {
+      if (index === 0) return;
+      const prevBlock = pageData.blocks[index - 1];
+      prevBlock.text = `${prevBlock.text} ${block.text}`.trim();
+      pageData.blocks.splice(index, 1);
+      rerender();
+    });
+  });
+
+  // ＋ 新增 Block：在最後面加一個空白欄位，方便老師補充內容
+  const addBtn = document.createElement('button');
+  addBtn.className = 'add-block-btn';
+  addBtn.textContent = '＋ 新增 Block';
+  addBtn.addEventListener('click', () => {
+    const newBlock = { id: `p${pageNum}-b-new-${Date.now()}`, type: 'text', text: '' };
+    pageData.blocks.push(newBlock);
+    rerender();
+    focusLastTextarea(container);
+  });
+  container.appendChild(addBtn);
+}
+
+/**
+ * 把游標移到容器內最後一個文字框，並聚焦。
+ * 用於「自己輸入」「新增 Block」之後，讓老師不用自己點擊就能直接打字。
+ */
+function focusLastTextarea(container) {
+  const textareas = container.querySelectorAll('textarea.editable-block');
+  const last = textareas[textareas.length - 1];
+  if (last) {
+    last.focus();
+    last.setSelectionRange(last.value.length, last.value.length);
+  }
+}
+
+document.getElementById('editPrevBtn').addEventListener('click', async () => {
+  await savePageBeforeLeaving(state.currentEditPage);
+  if (state.currentEditPage > 1) renderEditPage(state.currentEditPage - 1);
+});
+document.getElementById('editNextBtn').addEventListener('click', async () => {
+  await savePageBeforeLeaving(state.currentEditPage);
+  if (state.currentEditPage < state.pages.length) renderEditPage(state.currentEditPage + 1);
+});
+
+/**
+ * 把目前頁面的 Blocks 存進 Repository。
+ * 老師翻頁、離開編輯畫面前都會呼叫這個函式 —— 每一頁各自獨立儲存，
+ * 不等到整本書編完才一次性存檔，降低資料遺失的風險。
+ */
+async function savePageBeforeLeaving(pageNum) {
+  const pageData = state.pages.find(p => p.pageNumber === pageNum);
+  if (pageData && pageData.blocks) {
+    await bookRepository.savePage(state.currentBookId, pageNum, pageData.blocks);
+  }
+}
+
+/**
+ * 刪除本頁 — 教材整理的一部分。
+ * 對應需求：封面、版權頁、目錄、作者介紹等不需要轉成教材的頁面，
+ * 老師應該可以直接整頁移除，不需要保留空白內容。
+ *
+ * 刪除後：
+ *   1. 呼叫 Repository 的 deletePage()，由 Repository 負責維護頁碼連續性
+ *   2. 重新從 Repository 載入最新的 pages，反映到畫面上
+ */
+document.getElementById('deletePageBtn').addEventListener('click', async () => {
+  if (state.pages.length <= 1) {
+    alert('這是最後一頁，無法刪除。教材至少需要保留一頁。');
+    return;
+  }
+  const confirmed = confirm(`確定要刪除第 ${state.currentEditPage} 頁嗎？刪除後無法復原。`);
+  if (!confirmed) return;
+
+  await bookRepository.deletePage(state.currentBookId, state.currentEditPage);
+  const updatedBook = await bookRepository.loadBook(state.currentBookId);
+  state.pages = updatedBook.pages;
+
+  const nextPageToShow = Math.min(state.currentEditPage, state.pages.length);
+  renderEditPage(nextPageToShow);
+});
+
+document.getElementById('saveBtn').addEventListener('click', async () => {
+  // 教材基本資料（標題）與目前頁面的 Blocks 分開儲存 —— 對應 Schema：
+  // books（title 等）與 pages（blocks）是兩張表，各自獨立的儲存動作。
+  await bookRepository.saveBook({
+    id: state.currentBookId,
+    title: state.materialName,
+  });
+  await savePageBeforeLeaving(state.currentEditPage);
+
+  renderStepper(3);
+  document.getElementById('readTitle').textContent = state.materialName;
+  showScreen('screen-read');
+  state.currentReadPage = 1;
+  await renderReadPage(1);
+});
+
+document.getElementById('backToEditBtn').addEventListener('click', async () => {
+  renderStepper(2);
+  showScreen('screen-edit');
+  await renderEditPage(state.currentReadPage);
+});
+
+document.getElementById('backToMyBooksFromReadBtn').addEventListener('click', async () => {
+  showScreen('screen-mybooks');
+  await renderMyBooksScreen();
+});
+
+// ============================================================
+// 畫面 4：閱讀模式（含選字互動）
+// ============================================================
+function blocksToReadHtml(blocks) {
+  if (!blocks) return '<p style="color:#aaa">（這一頁尚未校對，請先到編輯模式處理）</p>';
+  return blocks.map(b => {
+    const tag = b.type === 'heading' ? 'h2' : 'p';
+    const escaped = b.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return `<${tag} data-block-id="${b.id}">${escaped}</${tag}>`;
+  }).join('\n');
+}
+
+async function renderReadPage(pageNum) {
+  state.currentReadPage = pageNum;
+  const pageData = state.pages.find(p => p.pageNumber === pageNum);
+  const page = await state.pdfDoc.getPage(pageData.originalPdfPage);
+  const viewport = page.getViewport({ scale: 1.5 });
+  const canvas = document.getElementById('readPdfCanvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+
+  document.getElementById('readBlocks').innerHTML = blocksToReadHtml(pageData.blocks);
+
+  document.getElementById('readPageIndicator').textContent = `第 ${pageNum} / ${state.pages.length} 頁`;
+  document.getElementById('readPrevBtn').disabled = pageNum <= 1;
+  document.getElementById('readNextBtn').disabled = pageNum >= state.pages.length;
+}
+
+document.getElementById('readPrevBtn').addEventListener('click', () => {
+  if (state.currentReadPage > 1) renderReadPage(state.currentReadPage - 1);
+});
+document.getElementById('readNextBtn').addEventListener('click', () => {
+  if (state.currentReadPage < state.pages.length) renderReadPage(state.currentReadPage + 1);
+});
+
+// ---- 選字互動面板 ----
+let activePanel = null, activeResultBox = null, activeHighlightMark = null;
+
+function closePanels() {
+  if (activePanel) { activePanel.remove(); activePanel = null; }
+  if (activeResultBox) { activeResultBox.remove(); activeResultBox = null; }
+  clearHighlight();
+}
+
+/**
+ * 在選取/點擊的文字範圍上，包一層 <mark> 標記，產生持續、明確的視覺反白。
+ * 這跟瀏覽器原生的選取反白（::selection）不同 —— 原生反白只在「滑鼠按住拖曳」
+ * 的過程中才存在，放開滑鼠或點擊後就消失；這裡用程式主動建立的標記，
+ * 會一直保留到面板關閉或查詢完成，讓使用者清楚知道「目前查詢的是哪一段」。
+ */
+function applyHighlight(range) {
+  clearHighlight();
+  const mark = document.createElement('mark');
+  mark.className = 'active-query-highlight';
+  try {
+    range.surroundContents(mark);
+    activeHighlightMark = mark;
+  } catch (err) {
+    // 範圍跨越多個元素邊界時 surroundContents 可能失敗，這種情況不強求反白，
+    // 但不影響查関面板本身的功能（發音/翻譯/字典仍正常運作）。
+    console.warn('反白標記建立失敗（不影響查閱功能）:', err.message);
+  }
+}
+
+function clearHighlight() {
+  if (activeHighlightMark && activeHighlightMark.parentNode) {
+    const parent = activeHighlightMark.parentNode;
+    while (activeHighlightMark.firstChild) {
+      parent.insertBefore(activeHighlightMark.firstChild, activeHighlightMark);
+    }
+    parent.removeChild(activeHighlightMark);
+    parent.normalize(); // 合併因拆解標記而分裂的相鄰文字節點
+  }
+  activeHighlightMark = null;
+}
+
+/**
+ * 查閱面板定位邏輯：
+ *   1. 預設顯示在選取文字正上方（最常見、最不擋住視線的位置）。
+ *   2. 如果上方空間不夠放面板，改顯示在選取文字下方。
+ *   3. 水平方向若會超出可視範圍（左或右），整體往內推，確保完整可見。
+ * 目標是讓使用者完全不需要移動視線去找面板，查完馬上能回到原本閱讀的位置。
+ */
+function positionFloatingElement(el, anchorRect, paneRect, gap = 10) {
+  // 先暫時定位、量出實際尺寸，才能準確判斷夠不夠放
+  el.style.visibility = 'hidden';
+  el.style.left = '0px';
+  el.style.top = '0px';
+  const elWidth = el.offsetWidth;
+  const elHeight = el.offsetHeight;
+
+  const spaceAbove = anchorRect.top - paneRect.top;
+  const spaceBelow = paneRect.bottom - anchorRect.bottom;
+  const placeBelow = spaceAbove < (elHeight + gap) && spaceBelow >= (elHeight + gap);
+
+  let top = placeBelow
+    ? anchorRect.bottom - paneRect.top + gap
+    : anchorRect.top - paneRect.top - elHeight - gap;
+  // 萬一上下都不夠（畫面很窄），至少不要被切到畫面外，貼著可視範圍邊緣
+  top = Math.max(4, Math.min(top, paneRect.height - elHeight - 4));
+
+  let left = anchorRect.left + anchorRect.width / 2 - paneRect.left - elWidth / 2;
+  left = Math.max(8, Math.min(left, paneRect.width - elWidth - 8));
+
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+  el.style.visibility = 'visible';
+}
+
+function showSelectionPanel(rect, selectedText, range) {
+  closePanels();
+  if (range) applyHighlight(range.cloneRange());
+
+  const pane = document.getElementById('readPane');
+  const paneRect = pane.getBoundingClientRect();
+  // anchorRect 要換算成相對於 pane 的捲動座標系，跟反白標記、結果框統一基準
+  const anchorRect = {
+    top: rect.top + pane.scrollTop,
+    bottom: rect.bottom + pane.scrollTop,
+    left: rect.left + pane.scrollLeft,
+    width: rect.width,
+  };
+  const scrolledPaneRect = {
+    top: paneRect.top + pane.scrollTop,
+    bottom: paneRect.top + pane.scrollTop + pane.clientHeight,
+    left: paneRect.left + pane.scrollLeft,
+    width: pane.clientWidth,
+    height: pane.clientHeight,
+  };
+
+  const panel = document.createElement('div');
+  panel.className = 'selection-panel';
+  const tools = [
+    { icon:'🔊', label:'發音', action:()=>speak(selectedText) },
+    { icon:'🌐', label:'翻譯', action:()=>handleTranslateClick(panel, selectedText, anchorRect, scrolledPaneRect) },
+    { icon:'📖', label:'字典', action:()=>openCambridgeDictionary(selectedText) },
+    { icon:'🤖', label:'AI 解釋', action:()=>showResult(panel,'AI 解釋（示範）',`關於「${selectedText}」的解釋（未來功能）`, anchorRect, scrolledPaneRect) },
+  ];
+  tools.forEach(t => {
+    const btn = document.createElement('button');
+    btn.innerHTML = `${t.icon} ${t.label}`;
+    btn.onclick = (e) => { e.stopPropagation(); t.action(); };
+    panel.appendChild(btn);
+  });
+  pane.appendChild(panel);
+  positionFloatingElement(panel, anchorRect, scrolledPaneRect);
+  activePanel = panel;
+}
+function showResult(panel, label, text, anchorRect, paneRect) {
+  if (activeResultBox) activeResultBox.remove();
+  const box = document.createElement('div');
+  box.className = 'result-box';
+  box.innerHTML = `<div class="label">${label}</div>${text}`;
+  document.getElementById('readPane').appendChild(box);
+  // 結果框跟選字面板用同一個錨點（選取文字的位置）做邊界判斷，
+  // 不是疊在面板下面 —— 這樣面板在上方或下方時，結果框都能各自找到不擋視線的位置。
+  positionFloatingElement(box, anchorRect, paneRect);
+  activeResultBox = box;
+}
+function speak(text) {
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'en-US';
+  u.rate = state.readingSettings.playbackRate;
+  speechSynthesis.speak(u);
+}
+
+/**
+ * 教材查閱 — 字典能力
+ * 對應 PRD：閱讀不中斷原則裡，字典是唯一允許「新分頁」的例外
+ * （因為劍橋字典沒有提供可內嵌使用的免費 API）。
+ * 使用劍橋字典官方提供的搜尋網址格式，真正開啟新分頁，不是只彈出提示訊息。
+ */
+function openCambridgeDictionary(text) {
+  const url = `https://dictionary.cambridge.org/search/english/direct/?q=${encodeURIComponent(text)}`;
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+/**
+ * 教材查閱 — 翻譯能力
+ * Technical Design：
+ *   主要使用 Google Translate 的公開端點（瀏覽器擴充功能內部使用的同一個服務，
+ *   免金鑰、品質與 translate.google.com 網頁版相同），翻譯品質比純粹的
+ *   翻譯記憶資料庫服務（如 MyMemory）穩定得多，尤其是完整句子的語意。
+ *   若主要端點失敗（例如網路問題或服務暫時不可用），退回 MyMemory 作為備援，
+ *   確保功能不會整個掛掉。之後若要更換服務商，只需改動這個函式內部。
+ */
+async function translateWithGoogle(text, targetLang = 'zh-TW') {
+  const params = new URLSearchParams({
+    client: 'gtx',
+    sl: 'en',
+    tl: targetLang,
+    dt: 't',
+    q: text,
+  });
+  const response = await fetch(`https://translate.googleapis.com/translate_a/single?${params}`);
+  if (!response.ok) throw new Error('Google 翻譯暫時無法使用');
+  const data = await response.json();
+  // 回應格式：[[["翻譯結果","原文",null,null,...], ...], ...]
+  const translated = data[0].map(segment => segment[0]).join('');
+  if (!translated) throw new Error('Google 翻譯回應格式異常');
+  return translated;
+}
+
+async function translateWithMyMemory(text, targetLang = 'zh-TW') {
+  const params = new URLSearchParams({
+    q: text,
+    langpair: `en|${targetLang}`,
+  });
+  const response = await fetch(`https://api.mymemory.translated.net/get?${params}`);
+  if (!response.ok) throw new Error('翻譯服務暫時無法使用');
+  const data = await response.json();
+  if (data.responseStatus !== 200) throw new Error(data.responseDetails || '翻譯失敗');
+  return data.responseData.translatedText;
+}
+
+async function translateText(text, targetLang = 'zh-TW') {
+  try {
+    return await translateWithGoogle(text, targetLang);
+  } catch (err) {
+    console.warn('Google 翻譯失敗，改用備援服務:', err.message);
+    return await translateWithMyMemory(text, targetLang);
+  }
+}
+
+async function handleTranslateClick(panel, selectedText, anchorRect, paneRect) {
+  showResult(panel, '翻譯', '翻譯中...', anchorRect, paneRect);
+  try {
+    const translated = await translateText(selectedText);
+    showResult(panel, '翻譯', translated, anchorRect, paneRect);
+  } catch (err) {
+    showResult(panel, '翻譯', `（翻譯失敗：${err.message}）`, anchorRect, paneRect);
+  }
+}
+/**
+ * 教材查閱的觸發方式有兩種，對應老師/學生實際閱讀時的習慣：
+ * 1. 拖曳選取一段文字（片語/句子）→ mouseup 後有選取範圍
+ * 2. 直接點擊／點兩下一個單字 → 沒有拖曳，但仍應該能查閱這個字
+ * 兩者都要能叫出同一個查閱面板，這樣才是「可直接查閱的可互動教材」，
+ * 不是「只能整段選取才有用」的半成品。
+ */
+document.getElementById('readBlocks').addEventListener('mouseup', () => {
+  const sel = window.getSelection();
+  const text = sel.toString().trim();
+  if (text.length > 0) {
+    const range = sel.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    showSelectionPanel(rect, text, range);
+    sel.removeAllRanges(); // 改用自訂反白標記顯示，不需要保留瀏覽器原生選取狀態
+  }
+});
+
+// 點擊／點兩下單一個字：瀏覽器原生雙擊會自動選取該字，這裡額外處理單純點擊一次的情況
+document.getElementById('readBlocks').addEventListener('click', (e) => {
+  // 如果剛剛已經有拖曳選取（mouseup 已處理），就不要再重複觸發
+  const sel = window.getSelection();
+  if (sel.toString().trim().length > 0) return;
+
+  const target = e.target.closest('p, h2');
+  if (!target) return;
+
+  // 用瀏覽器內建的 caretRangeFromPoint / caretPositionFromPoint 找出點擊位置所在的單字
+  const word = getWordAtPoint(e.clientX, e.clientY);
+  if (word && word.text) {
+    showSelectionPanel(word.rect, word.text, word.range);
+  }
+});
+
+/**
+ * 找出滑鼠點擊座標所在的單字範圍與文字內容。
+ * 用於支援「直接點一個字」就能查閱，不需要刻意拖曳選取。
+ */
+function getWordAtPoint(x, y) {
+  let range;
+  if (document.caretRangeFromPoint) {
+    range = document.caretRangeFromPoint(x, y);
+  } else if (document.caretPositionFromPoint) {
+    const pos = document.caretPositionFromPoint(x, y);
+    if (!pos) return null;
+    range = document.createRange();
+    range.setStart(pos.offsetNode, pos.offset);
+    range.collapse(true);
+  }
+  if (!range) return null;
+
+  const node = range.startContainer;
+  if (node.nodeType !== Node.TEXT_NODE) return null;
+
+  const text = node.textContent;
+  let start = range.startOffset;
+  let end = range.startOffset;
+  // 往左找到單字開頭、往右找到單字結尾（以空白與標點為界）
+  const isWordChar = (ch) => ch && /[A-Za-z0-9'-]/.test(ch);
+  while (start > 0 && isWordChar(text[start - 1])) start--;
+  while (end < text.length && isWordChar(text[end])) end++;
+  if (start === end) return null;
+
+  const wordRange = document.createRange();
+  wordRange.setStart(node, start);
+  wordRange.setEnd(node, end);
+
+  return {
+    text: text.slice(start, end),
+    rect: wordRange.getBoundingClientRect(),
+    range: wordRange,
+  };
+}
+
+document.addEventListener('mousedown', (e) => {
+  if (activePanel && !activePanel.contains(e.target)) {
+    setTimeout(() => { if (!window.getSelection().toString().trim()) closePanels(); }, 0);
+  }
+});
+
+// ============================================================
+// Feature：Reading Settings（閱讀設定）
+//
+// 屬於使用者偏好，不是教材內容 —— 所有教材共用同一組設定，
+// 且這份設定存在 Repository（正式版會是 Supabase），不是只存在這台裝置，
+// 老師換到別的裝置登入，也應該看到同樣的字體大小與發音速度。
+// ============================================================
+const FONT_SIZE_MIN = 70;
+const FONT_SIZE_MAX = 150;
+const FONT_SIZE_STEP = 10;
+
+function applyReadingSettingsToUI() {
+  const { fontSize, playbackRate } = state.readingSettings;
+  document.documentElement.style.setProperty('--reading-font-scale', fontSize / 100);
+  document.getElementById('fontSizeValue').textContent = `${fontSize}%`;
+  document.getElementById('playbackRateSelect').value = String(playbackRate);
+}
+
+async function updateReadingSettings(partial) {
+  state.readingSettings = { ...state.readingSettings, ...partial };
+  applyReadingSettingsToUI();
+  await bookRepository.saveUserSettings(state.readingSettings);
+}
+
+document.getElementById('toggleReadingSettingsBtn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  document.getElementById('readingSettingsPanel').classList.toggle('show');
+});
+
+// 點擊面板外的地方自動收起，跟選字查閱面板是一致的互動習慣
+document.addEventListener('click', (e) => {
+  const box = document.getElementById('readingSettingsBox');
+  if (box && !box.contains(e.target)) {
+    document.getElementById('readingSettingsPanel').classList.remove('show');
+  }
+});
+
+document.getElementById('fontSizeDownBtn').addEventListener('click', async () => {
+  const next = Math.max(FONT_SIZE_MIN, state.readingSettings.fontSize - FONT_SIZE_STEP);
+  await updateReadingSettings({ fontSize: next });
+});
+document.getElementById('fontSizeUpBtn').addEventListener('click', async () => {
+  const next = Math.min(FONT_SIZE_MAX, state.readingSettings.fontSize + FONT_SIZE_STEP);
+  await updateReadingSettings({ fontSize: next });
+});
+document.getElementById('playbackRateSelect').addEventListener('change', async (e) => {
+  await updateReadingSettings({ playbackRate: parseFloat(e.target.value) });
+});
+
+// ============================================================
+// 登入（最小驗證流程：Email + 密碼）
+// ============================================================
+function showLoginError(message) {
+  const box = document.getElementById('loginError');
+  box.style.display = 'block';
+  box.textContent = message;
+}
+function clearLoginError() {
+  document.getElementById('loginError').style.display = 'none';
+}
+
+/**
+ * 把 Supabase 回傳的 error（或任何例外）完整格式化成可讀文字，
+ * 不只取 error.message —— 因為某些情況下 error 可能沒有 message
+ * 屬性（例如網路層級的錯誤、或 file:// 環境下的 CORS 阻擋），
+ * 只印 error.message 會讓畫面跟 Console 都看不出真正發生了什麼。
+ */
+function formatAuthError(error) {
+  if (!error) return '未知錯誤（沒有收到任何錯誤物件）';
+
+  const parts = [];
+  if (error.message) parts.push(`message: ${error.message}`);
+  if (error.status !== undefined) parts.push(`status: ${error.status}`);
+  if (error.code) parts.push(`code: ${error.code}`);
+  if (error.name) parts.push(`name: ${error.name}`);
+
+  if (parts.length === 0) {
+    // 連常見屬性都沒有，把整個物件序列化出來，至少看得到原始內容
+    try {
+      parts.push('原始內容: ' + JSON.stringify(error));
+    } catch {
+      parts.push('原始內容無法序列化，請查看 Console 的完整物件');
+    }
+  }
+
+  console.error('Auth 錯誤完整物件：', error);
+  return parts.join(' | ');
+}
+
+async function enterAppAfterLogin() {
+  const { data } = await supabaseClient.auth.getUser();
+  document.getElementById('loggedInAsLabel').textContent = data?.user?.email
+    ? `登入身份：${data.user.email}`
+    : '';
+
+  const settings = await bookRepository.loadUserSettings();
+  state.readingSettings = settings;
+  applyReadingSettingsToUI();
+  await renderMyBooksScreen();
+  showScreen('screen-mybooks');
+}
+
+document.getElementById('loginBtn').addEventListener('click', async () => {
+  clearLoginError();
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  if (!email || !password) {
+    showLoginError('請輸入 Email 與密碼');
+    return;
+  }
+  try {
+    const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+    if (error) {
+      showLoginError('登入失敗：' + formatAuthError(error));
+      return;
+    }
+    await enterAppAfterLogin();
+  } catch (err) {
+    showLoginError('登入發生例外（非預期錯誤）：' + formatAuthError(err));
+  }
+});
+
+document.getElementById('signupBtn').addEventListener('click', async () => {
+  clearLoginError();
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  if (!email || !password) {
+    showLoginError('請輸入 Email 與密碼');
+    return;
+  }
+  if (password.length < 6) {
+    showLoginError('密碼至少需要 6 個字元');
+    return;
+  }
+  try {
+    const { error } = await supabaseClient.auth.signUp({ email, password });
+    if (error) {
+      showLoginError('註冊失敗：' + formatAuthError(error));
+      return;
+    }
+    showLoginError('註冊成功！若專案啟用了 Email 驗證，請先查看信箱完成驗證後再登入。');
+  } catch (err) {
+    showLoginError('註冊發生例外（非預期錯誤）：' + formatAuthError(err));
+  }
+});
+
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+  await supabaseClient.auth.signOut();
+  showScreen('screen-login');
+});
+
+/**
+ * 忘記密碼 — 第一階段：請求重設信。
+ * Supabase 內建寄信機制，這裡只需要呼叫 resetPasswordForEmail()，
+ * 不需要自己架設寄信服務。
+ */
+document.getElementById('forgotPasswordBtn').addEventListener('click', async () => {
+  clearLoginError();
+  const email = document.getElementById('loginEmail').value.trim();
+  if (!email) {
+    showLoginError('請先在上方輸入 Email，再點擊忘記密碼');
+    return;
+  }
+  const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+    redirectTo: window.location.href, // 信件連結會帶參數導回同一頁，由下方的 onAuthStateChange 接手
+  });
+  if (error) {
+    showLoginError('發送重設信失敗：' + error.message);
+    return;
+  }
+  showLoginError('已發送密碼重設信，請查看你的信箱並點擊信中連結。');
+});
+
+/**
+ * 忘記密碼 — 第二階段：使用者點擊信件連結後，Supabase 會自動把這次的
+ * session 標記為 PASSWORD_RECOVERY，並觸發 onAuthStateChange。
+ * 這裡攔截這個事件，導向「設定新密碼」畫面，而不是直接放老師進我的魔法書
+ * （即使這個連結本身已經讓 Supabase 建立了一個有效 session）。
+ */
+supabaseClient.auth.onAuthStateChange((event) => {
+  if (event === 'PASSWORD_RECOVERY') {
+    showScreen('screen-reset-password');
+  }
+});
+
+document.getElementById('updatePasswordBtn').addEventListener('click', async () => {
+  const errorBox = document.getElementById('resetPasswordError');
+  errorBox.style.display = 'none';
+
+  const newPassword = document.getElementById('newPasswordInput').value;
+  if (!newPassword || newPassword.length < 6) {
+    errorBox.style.display = 'block';
+    errorBox.textContent = '密碼至少需要 6 個字元';
+    return;
+  }
+
+  const { error } = await supabaseClient.auth.updateUser({ password: newPassword });
+  if (error) {
+    errorBox.style.display = 'block';
+    errorBox.textContent = '更新密碼失敗：' + error.message;
+    return;
+  }
+
+  await enterAppAfterLogin();
+});
+
+// 啟動時：檢查是否已經登入過（例如重新整理頁面），
+// 已登入則直接進入我的魔法書，否則停在登入畫面。
+// 若是從忘記密碼信件連結回來，onAuthStateChange 的 PASSWORD_RECOVERY
+// 事件會在這個檢查之後觸發，自動切換到設定新密碼畫面。
+(async () => {
+  const { data } = await supabaseClient.auth.getSession();
+  if (data?.session) {
+    await enterAppAfterLogin();
+  } else {
+    showScreen('screen-login');
+  }
+})();
+</script>
+
+</body>
+</html>
