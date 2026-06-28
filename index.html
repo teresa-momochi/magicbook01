@@ -1943,13 +1943,20 @@ const SOURCE_PARSERS = {
 async function parsePdfSource(file) {
   const arrayBuffer = await file.arrayBuffer();
   const pdfBytes = new Uint8Array(arrayBuffer);
+
+  // 重要：pdfjsLib.getDocument() 會把傳入的 ArrayBuffer 轉移（detach）給
+  // 內部的 Worker 執行緒以提升效能 —— 一旦轉移後，這份資料的記憶體就不再
+  // 屬於主執行緒，之後任何人想再用它（例如左側 Viewer 重新渲染、AI 辨識）
+  // 都會直接拋出 DataCloneError。因此這裡要先複製一份獨立的拷貝留著，
+  // 傳給 PDF.js 的是另一份，兩者不共用底層記憶體。
+  const pdfBytesForViewer = new Uint8Array(pdfBytes); // 獨立拷貝，留給之後重複使用
   const pdf = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
 
   const pagesBlocks = [];
   for (let i = 1; i <= pdf.numPages; i++) {
     pagesBlocks.push(await tryExtractPdfPageText(pdf, i));
   }
-  return { pagesBlocks, fileBytes: pdfBytes };
+  return { pagesBlocks, fileBytes: pdfBytesForViewer };
 }
 
 async function parseTxtSource(textContent) {
@@ -2023,6 +2030,14 @@ async function convertMaterial(file) {
   // 只需要呼叫統一的 processSource，跟「新增來源」走的是同一條路。
   setConvertStatus('嘗試直接讀取文字...');
   const { pageResults, fileBytes } = await processSource('pdf', file);
+
+  // ---- 臨時診斷輸出（排查用，問題確認後會移除）----
+  console.log('%c[診斷] processSource 回傳 pageResults:', 'color:blue;font-weight:bold', JSON.parse(JSON.stringify(pageResults)));
+  pageResults.forEach((p, i) => {
+    console.log(`%c[診斷] 第${i + 1}頁 → blocks.length=${p.blocks.length}, buildState=${p.buildState}, blocks內容=`, 'color:green', JSON.stringify(p.blocks));
+  });
+  // ---- 診斷輸出結束 ----
+
   const pagesWithText = pageResults.filter(p => p.buildState === 'editing').length;
   logConvert(`共 ${pageResults.length} 頁，${pagesWithText} 頁成功直接讀到文字`);
 
@@ -2045,8 +2060,11 @@ async function convertMaterial(file) {
   }
 
   const pageBlocksList = pageResults.map(p => p.blocks);
+  console.log('%c[診斷] 準備寫入insertPagesAfter的pageBlocksList:', 'color:blue;font-weight:bold', JSON.stringify(pageBlocksList));
+
   await bookRepository.insertPagesAfter(state.currentBookId, 0, source.id, pageBlocksList);
   const savedBookWithPages = await bookRepository.loadBook(state.currentBookId);
+  console.log('%c[診斷] loadBook()讀回的pages:', 'color:purple;font-weight:bold', JSON.parse(JSON.stringify(savedBookWithPages.pages)));
 
   // loadBook() 回傳的 pages 只有 blocks（教材內容），buildState 是前端流程
   // 控制用的欄位，這裡依剛才文字抽取的結果補上，不存進資料庫。
@@ -2054,6 +2072,7 @@ async function convertMaterial(file) {
     ...p,
     buildState: pageResults[idx]?.buildState ?? 'editing',
   }));
+  console.log('%c[診斷] 最終 state.pages:', 'color:red;font-weight:bold', JSON.parse(JSON.stringify(state.pages)));
 
   renderStepper(2);
   state.currentEditPage = 1;
@@ -2155,7 +2174,7 @@ async function getPageImageForAi(pageData) {
   if (!source) return null;
 
   if (source.type === 'pdf') {
-    const pdfBytes = state.sourceFilesById?.[pageData.sourceId];
+    const pdfBytes = getPdfBytesCopy(pageData.sourceId);
     if (!pdfBytes) return null;
     const pdf = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
     const page = await pdf.getPage(pageData.sourcePageIndex || 1);
@@ -2292,7 +2311,7 @@ async function renderSourceViewer(pageData) {
   }
 
   if (source.type === 'pdf') {
-    const pdfBytes = state.sourceFilesById?.[sourceId];
+    const pdfBytes = getPdfBytesCopy(sourceId);
     if (!pdfBytes) {
       // 這份來源的原始檔案目前不在前端記憶體中（例如重新整理頁面後遺失，
       // 因為原始檔案的持久化儲存屬於 Storage 的職責，不在這次範圍內）。
@@ -2386,6 +2405,22 @@ async function getSourceById(sourceId) {
     state.sourcesById[s.id] = s;
   }
   return state.sourcesById[sourceId] || null;
+}
+
+/**
+ * 取得指定來源的 PDF 原始資料，永遠回傳一份「新的獨立拷貝」。
+ *
+ * 重要：pdfjsLib.getDocument() 會把傳入的 ArrayBuffer 轉移（detach）給
+ * 內部 Worker 執行緒 —— 一旦被傳過一次，這份資料就不能再被任何人使用，
+ * 包括這個函式自己。state.sourceFilesById 裡存的是「安全的母本」，
+ * 永遠不直接拿這份母本去呼叫 PDF.js，而是每次都從它複製一份新的
+ * Uint8Array 再傳出去，這樣左側 Viewer 重複翻頁、AI 辨識等任何需要
+ * 重新讀取這份 PDF 的地方，都不會撞到 DataCloneError。
+ */
+function getPdfBytesCopy(sourceId) {
+  const original = state.sourceFilesById?.[sourceId];
+  if (!original) return null;
+  return new Uint8Array(original);
 }
 
 /**
@@ -2874,7 +2909,7 @@ async function renderReadSourceViewer(pageData) {
   }
 
   if (source.type === 'pdf') {
-    const pdfBytes = state.sourceFilesById?.[sourceId];
+    const pdfBytes = getPdfBytesCopy(sourceId);
     const canvas = document.getElementById('readPdfCanvas');
     if (!pdfBytes) {
       pdfPane.style.display = '';
