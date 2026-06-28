@@ -314,6 +314,10 @@
     padding: 16px;
     margin-bottom: 12px;
   }
+  .build-choice-option-disabled {
+    opacity: 0.5;
+    background: #fafafa;
+  }
   .build-choice-option-header {
     display: flex; align-items: center; justify-content: space-between;
     margin-bottom: 6px; font-size: 15px;
@@ -369,11 +373,36 @@
   footer button:hover { background: #f3f3f3; }
   footer button:disabled { opacity: 0.35; cursor: default; }
   footer .page-indicator { font-size: 14px; color: #555; min-width: 70px; text-align: center; }
+
+  .page-manage-actions {
+    position: absolute; right: 16px; display: flex; gap: 8px;
+  }
+  .page-manage-actions button {
+    border: 1px solid var(--border); background: white; border-radius: 8px;
+    padding: 8px 14px; font-size: 13px; cursor: pointer;
+  }
+  .page-manage-actions button:hover { background: #f3f3f3; }
+  .page-manage-actions button:disabled { opacity: 0.35; cursor: default; }
   .delete-page-btn {
-    position: absolute; right: 16px;
     color: #c0392b; border-color: #f1c6c0 !important;
   }
   .delete-page-btn:hover { background: #fdecea !important; }
+
+  .source-picker {
+    position: absolute; bottom: calc(100% + 8px); right: 0;
+    width: 200px; background: white; border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+    padding: 10px; display: none; z-index: 60;
+  }
+  .source-picker.show { display: block; }
+  .source-picker-title { font-size: 12px; color: #888; margin-bottom: 8px; padding: 0 4px; }
+  .source-picker-option {
+    display: block; width: 100%; text-align: left;
+    border: none; background: none; padding: 9px 8px; border-radius: 6px;
+    font-size: 14px; cursor: pointer;
+  }
+  .source-picker-option:hover:not(:disabled) { background: #f4faf4; }
+  .source-picker-option:disabled { opacity: 0.4; cursor: not-allowed; }
 
   /* 選字互動面板 */
   .selection-panel {
@@ -583,7 +612,21 @@
     <button id="editPrevBtn">← 上一頁</button>
     <span class="page-indicator" id="editPageIndicator">第 1 / 1 頁</span>
     <button id="editNextBtn">下一頁 →</button>
-    <button id="deletePageBtn" class="delete-page-btn">🗑 刪除本頁</button>
+    <div class="page-manage-actions">
+      <button id="movePageUpBtn" title="把這一頁往前移">⬆ 上移</button>
+      <button id="movePageDownBtn" title="把這一頁往後移">⬇ 下移</button>
+      <button id="insertPageBtn" title="新增一個教材來源">＋ 新增來源</button>
+      <div class="source-picker" id="sourcePicker">
+        <div class="source-picker-title">選擇教材來源</div>
+        <button class="source-picker-option" data-source-type="pdf">📄 PDF</button>
+        <button class="source-picker-option" data-source-type="image" disabled>🖼 圖片</button>
+        <button class="source-picker-option" data-source-type="word" disabled>📝 Word</button>
+        <button class="source-picker-option" data-source-type="pptx" disabled>📊 PowerPoint</button>
+        <button class="source-picker-option" data-source-type="xlsx" disabled>📈 Excel</button>
+        <button class="source-picker-option" data-source-type="txt">📄 純文字</button>
+      </div>
+      <button id="deletePageBtn" class="delete-page-btn">🗑 刪除本頁</button>
+    </div>
   </footer>
 </div>
 
@@ -727,23 +770,46 @@ const SUPABASE_URL = 'https://lbysrnhhhgzcjldyatok.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_iMU_lerFc8AwTNK3hfwPfw_kzLfLFcW';
 const supabaseClient = supabaseLib.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+/**
+ * officeParser（Word／PowerPoint／Excel 免費文字抽取）— 延遲載入。
+ * 不是每位老師都會用到這三種格式，所以不在啟動時就載入，
+ * 只在老師第一次選擇這幾種來源時才下載，避免增加所有人的啟動成本。
+ */
+let officeParserLib = null;
+async function getOfficeParserLib() {
+  if (officeParserLib) return officeParserLib;
+  await new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/officeparser@5/dist/officeparser.browser.iife.js';
+    script.onload = resolve;
+    script.onerror = () => reject(new Error('文件解析模組載入失敗'));
+    document.head.appendChild(script);
+    setTimeout(() => reject(new Error('文件解析模組載入逾時')), 15000);
+  });
+  officeParserLib = window.officeParser;
+  return officeParserLib;
+}
+
 // ============================================================
 // 資料結構說明
 //
-// Book（一本教材，對應 Repository 的 books + pages）：
-//   books:  { id, title, cover, createdAt, updatedAt }
-//   pages:  [{ pageNumber, blocks }]  —— 每頁獨立儲存，逐頁存取
+// Book（一本教材，對應 Repository 的 books + pages + sources）：
+//   books:   { id, title, cover, createdAt, updatedAt }
+//   sources: { id, type, filePath, createdAt } —— 一本書可以有多個來源
+//   pages:   [{ pageNumber, blocks, sourceId, sourcePageIndex }]
+//            —— 每頁獨立儲存，且永遠屬於一個 Source（或 sourceId 為 null，
+//            代表這頁是直接開始編輯／貼上文字產生的，沒有對應來源）
 //
-// Repository 只認得 Blocks，不保存、也不知道教材原本來自 PDF、Word、
-// 直接輸入或其他來源 —— 這是 Book Creation Feature 的職責，文字一旦
-// 轉成 Blocks，來源的任務就完成了。
+// Repository 只認得 Blocks 與 Source 的基本資訊（type／filePath），
+// 不知道、也不需要知道不同格式各自怎麼取得文字 —— 那是 Parser Registry
+// 的職責，文字一旦轉成 Blocks，來源的任務就完成了。
 //
-// state.pages 裡每個 page 額外帶的 originalPdfPage，只是這次示範用
-// PDF 來源時，本地畫面渲染需要的資訊（左側要顯示哪一頁 PDF 圖像），
-// 不是 Repository 的正式資料，不會被存進 books/pages。
+// state.sourceFilesById 暫存原始檔案的位元組，供左側 Viewer 渲染使用，
+// 只存在前端記憶體（重新整理頁面會遺失）—— 正式的檔案持久化儲存
+// 屬於 Storage 的職責，不在目前範圍內。
 //
 // state 只放「目前畫面正在操作的東西」，不是正式資料 —— 正式資料一律經過
-// BookRepository 存取，state 只是暫存 UI 當下需要的執行期物件（如 pdfDoc）。
+// BookRepository 存取，state 只是暫存 UI 當下需要的執行期物件。
 // ============================================================
 const state = {
   currentBookId: null,
@@ -788,6 +854,8 @@ class BookRepository {
 
   async savePage(bookId, pageNumber, blocks) { throw new Error('Not implemented'); }
   async deletePage(bookId, pageNumber) { throw new Error('Not implemented'); }
+  async insertPagesAfter(bookId, afterPageNumber, sourceId, pageBlocksList) { throw new Error('Not implemented'); }
+  async movePage(bookId, pageNumber, direction) { throw new Error('Not implemented'); }
 
   getPageHtml(blocks) { throw new Error('Not implemented'); }
 
@@ -795,6 +863,9 @@ class BookRepository {
   async saveUserSettings(settings) { throw new Error('Not implemented'); }
 
   async countBooks() { throw new Error('Not implemented'); }
+
+  async addSource(bookId, sourceType, filePath) { throw new Error('Not implemented'); }
+  async listSources(bookId) { throw new Error('Not implemented'); }
 }
 
 /**
@@ -816,8 +887,9 @@ function blocksToHtml(blocks) {
 class MemoryRepository extends BookRepository {
   constructor() {
     super();
-    this._books = new Map();   // bookId -> { id, title, cover, createdAt, updatedAt }
-    this._pages = new Map();   // bookId -> [{ pageNumber, blocks }]（陣列順序即頁碼順序）
+    this._books = new Map();    // bookId -> { id, title, cover, createdAt, updatedAt }
+    this._pages = new Map();    // bookId -> [{ pageNumber, blocks, sourceId, sourcePageIndex }]
+    this._sources = new Map();  // bookId -> [{ id, type, filePath, createdAt }]
     this._userSettings = { fontSize: 100, playbackRate: 1.0 };
   }
 
@@ -847,6 +919,9 @@ class MemoryRepository extends BookRepository {
     if (!this._pages.has(book.id)) {
       this._pages.set(book.id, []);
     }
+    if (!this._sources.has(book.id)) {
+      this._sources.set(book.id, []);
+    }
     return saved;
   }
 
@@ -856,13 +931,19 @@ class MemoryRepository extends BookRepository {
     const pages = this._pages.get(bookId) || [];
     return {
       ...book,
-      pages: pages.map(p => ({ pageNumber: p.pageNumber, blocks: p.blocks })),
+      pages: pages.map(p => ({
+        pageNumber: p.pageNumber,
+        blocks: p.blocks,
+        sourceId: p.sourceId ?? null,
+        sourcePageIndex: p.sourcePageIndex ?? null,
+      })),
     };
   }
 
   async deleteBook(bookId) {
     this._books.delete(bookId);
     this._pages.delete(bookId);
+    this._sources.delete(bookId);
   }
 
   async renameBook(bookId, newTitle) {
@@ -872,6 +953,59 @@ class MemoryRepository extends BookRepository {
     book.updatedAt = new Date().toISOString();
   }
 
+  /**
+   * 新增一個教材來源（PDF／Word／PowerPoint／Excel／圖片／純文字／未來其他格式）。
+   * Repository 不關心格式具體是什麼，只負責記錄 type 跟檔案參照 —— 不同格式
+   * 怎麼取得文字、左側怎麼顯示，是 Source/Text Parser/Viewer 各自的職責，
+   * 不影響這裡的儲存邏輯。
+   */
+  async addSource(bookId, sourceType, filePath) {
+    const sources = this._sources.get(bookId);
+    if (!sources) throw new Error(`找不到教材 (id=${bookId})`);
+
+    const source = {
+      id: `source-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      type: sourceType,
+      filePath: filePath ?? null,
+      createdAt: new Date().toISOString(),
+    };
+    sources.push(source);
+    return source;
+  }
+
+  async listSources(bookId) {
+    return [...(this._sources.get(bookId) || [])];
+  }
+
+  /**
+   * 在指定頁碼之後，插入一批新頁面（對應一個 Source 取得文字後產生的
+   * 一個或多個 Block 陣列，例如一份 5 頁 PDF 會產生 5 個 pageBlocksList 項目）。
+   * 每個新頁面都記錄自己屬於哪個 sourceId、對應該來源的第幾頁（sourcePageIndex）。
+   */
+  async insertPagesAfter(bookId, afterPageNumber, sourceId, pageBlocksList) {
+    const pages = this._pages.get(bookId);
+    if (!pages) throw new Error(`找不到教材 (id=${bookId})`);
+
+    const insertIndex = afterPageNumber === 0
+      ? 0
+      : pages.findIndex(p => p.pageNumber === afterPageNumber) + 1;
+
+    const newPages = pageBlocksList.map((blocks, i) => ({
+      pageNumber: -1, // 之後統一重新編號，這裡先佔位
+      blocks,
+      sourceId,
+      sourcePageIndex: i + 1,
+    }));
+
+    pages.splice(insertIndex, 0, ...newPages);
+    pages.forEach((p, i) => { p.pageNumber = i + 1; });
+
+    const book = this._books.get(bookId);
+    if (book) book.updatedAt = new Date().toISOString();
+
+    return newPages;
+  }
+
   async savePage(bookId, pageNumber, blocks) {
     const pages = this._pages.get(bookId);
     if (!pages) throw new Error(`找不到教材 (id=${bookId})`);
@@ -879,7 +1013,7 @@ class MemoryRepository extends BookRepository {
     if (existing) {
       existing.blocks = blocks;
     } else {
-      pages.push({ pageNumber, blocks });
+      pages.push({ pageNumber, blocks, sourceId: null, sourcePageIndex: null });
       pages.sort((a, b) => a.pageNumber - b.pageNumber);
     }
     const book = this._books.get(bookId);
@@ -895,6 +1029,27 @@ class MemoryRepository extends BookRepository {
 
     pages.splice(index, 1);
     // 維護頁碼連續性：刪除後，重新排成 1..N
+    pages.forEach((p, i) => { p.pageNumber = i + 1; });
+
+    const book = this._books.get(bookId);
+    if (book) book.updatedAt = new Date().toISOString();
+  }
+
+  /**
+   * 把指定頁與相鄰頁互換順序。direction 為 'up'（往前移）或 'down'（往後移）。
+   * 移到最前/最後時不做任何事（沒有相鄰頁可以交換）。
+   */
+  async movePage(bookId, pageNumber, direction) {
+    const pages = this._pages.get(bookId);
+    if (!pages) throw new Error(`找不到教材 (id=${bookId})`);
+
+    const index = pages.findIndex(p => p.pageNumber === pageNumber);
+    if (index === -1) throw new Error(`找不到頁面 (pageNumber=${pageNumber})`);
+
+    const swapIndex = direction === 'up' ? index - 1 : index + 1;
+    if (swapIndex < 0 || swapIndex >= pages.length) return; // 已經在最前/最後，無法移動
+
+    [pages[index], pages[swapIndex]] = [pages[swapIndex], pages[index]];
     pages.forEach((p, i) => { p.pageNumber = i + 1; });
 
     const book = this._books.get(bookId);
@@ -1019,7 +1174,7 @@ class SupabaseRepository extends BookRepository {
 
     const { data: pages, error: pagesError } = await this.client
       .from('pages')
-      .select('page_number, blocks')
+      .select('page_number, blocks, source_id, source_page_index')
       .eq('book_id', bookId)
       .order('page_number', { ascending: true });
 
@@ -1031,7 +1186,12 @@ class SupabaseRepository extends BookRepository {
       cover: book.cover,
       createdAt: book.created_at,
       updatedAt: book.updated_at,
-      pages: (pages || []).map(p => ({ pageNumber: p.page_number, blocks: p.blocks })),
+      pages: (pages || []).map(p => ({
+        pageNumber: p.page_number,
+        blocks: p.blocks,
+        sourceId: p.source_id,
+        sourcePageIndex: p.source_page_index,
+      })),
     };
   }
 
@@ -1110,6 +1270,125 @@ class SupabaseRepository extends BookRepository {
         if (updateError) throw updateError;
       }
     }
+
+    await this._touchBook(bookId);
+  }
+
+  /**
+   * 在指定頁碼之後插入一個空白頁（blocks 為空陣列）。
+   * 教材頁數不受原始來源頁數限制，老師可在任意位置插入補充頁。
+   *
+   * 注意：pages 表有 unique(book_id, page_number) 限制，插入會讓
+   * afterPageNumber 之後的所有頁碼往後推一位 —— 必須「從最後一頁
+   * 往前」依序更新，每一步的目標頁碼才會是先空出來的，否則會直接
+   * 撞到唯一性衝突（這跟 deletePage 的更新方向恰好相反：刪除是
+   * 從前往後收、往後推則要從後往前讓）。
+   */
+  /**
+   * 新增一個教材來源。Repository 不關心格式具體是什麼，只負責記錄
+   * type 跟檔案參照 —— 不同格式怎麼取得文字、左側怎麼顯示，是
+   * Source/Text Parser/Viewer 各自的職責，不影響這裡的儲存邏輯。
+   */
+  async addSource(bookId, sourceType, filePath) {
+    const { data, error } = await this.client
+      .from('sources')
+      .insert({ book_id: bookId, type: sourceType, file_path: filePath ?? null })
+      .select()
+      .single();
+    if (error) throw error;
+    return { id: data.id, type: data.type, filePath: data.file_path, createdAt: data.created_at };
+  }
+
+  async listSources(bookId) {
+    const { data, error } = await this.client
+      .from('sources')
+      .select('id, type, file_path, created_at')
+      .eq('book_id', bookId)
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    return (data || []).map(s => ({ id: s.id, type: s.type, filePath: s.file_path, createdAt: s.created_at }));
+  }
+
+  /**
+   * 在指定頁碼之後，插入一批新頁面（對應一個 Source 取得文字後產生的
+   * 一個或多個 Block 陣列）。每個新頁面記錄自己屬於哪個 sourceId、
+   * 對應該來源的第幾頁（sourcePageIndex，1-based）。
+   *
+   * 注意：pages 表有 unique(book_id, page_number) 限制，插入會讓
+   * afterPageNumber 之後的所有頁碼往後推 pageBlocksList.length 位 ——
+   * 必須「從最後一頁往前」依序更新，每一步的目標頁碼才會是先空出來的。
+   */
+  async insertPagesAfter(bookId, afterPageNumber, sourceId, pageBlocksList) {
+    const shiftAmount = pageBlocksList.length;
+
+    const { data: existingPages, error: fetchError } = await this.client
+      .from('pages')
+      .select('id, page_number')
+      .eq('book_id', bookId)
+      .order('page_number', { ascending: false }); // 從大到小，由後往前處理
+
+    if (fetchError) throw fetchError;
+
+    for (const page of existingPages || []) {
+      if (page.page_number > afterPageNumber) {
+        const { error: updateError } = await this.client
+          .from('pages')
+          .update({ page_number: page.page_number + shiftAmount })
+          .eq('id', page.id);
+        if (updateError) throw updateError;
+      }
+    }
+
+    const insertPayload = pageBlocksList.map((blocks, i) => ({
+      book_id: bookId,
+      page_number: afterPageNumber + i + 1,
+      blocks,
+      source_id: sourceId,
+      source_page_index: i + 1,
+    }));
+
+    const { data: newPages, error: insertError } = await this.client
+      .from('pages')
+      .insert(insertPayload)
+      .select();
+    if (insertError) throw insertError;
+
+    await this._touchBook(bookId);
+    return (newPages || []).map(p => ({
+      pageNumber: p.page_number,
+      blocks: p.blocks,
+      sourceId: p.source_id,
+      sourcePageIndex: p.source_page_index,
+    }));
+  }
+
+  /**
+   * 把指定頁與相鄰頁互換順序。direction 為 'up' 或 'down'。
+   * 互換時兩個頁碼會暫時衝突，先把其中一頁挪到一個不存在的暫時頁碼，
+   * 再分兩步完成交換，避免撞到 unique(book_id, page_number) 限制。
+   */
+  async movePage(bookId, pageNumber, direction) {
+    const swapPageNumber = direction === 'up' ? pageNumber - 1 : pageNumber + 1;
+
+    const { data: pages, error: fetchError } = await this.client
+      .from('pages')
+      .select('id, page_number')
+      .eq('book_id', bookId)
+      .in('page_number', [pageNumber, swapPageNumber]);
+
+    if (fetchError) throw fetchError;
+    const current = pages.find(p => p.page_number === pageNumber);
+    const target = pages.find(p => p.page_number === swapPageNumber);
+    if (!current || !target) return; // 已經在最前/最後，無法移動
+
+    const TEMP_PAGE_NUMBER = -1; // 暫時頁碼，book 內不會真的用到負數頁碼
+    await this.client.from('pages').update({ page_number: TEMP_PAGE_NUMBER }).eq('id', current.id);
+    await this.client.from('pages').update({ page_number: pageNumber }).eq('id', target.id);
+    const { error: finalError } = await this.client
+      .from('pages')
+      .update({ page_number: swapPageNumber })
+      .eq('id', current.id);
+    if (finalError) throw finalError;
 
     await this._touchBook(bookId);
   }
@@ -1448,8 +1727,7 @@ async function acquireTextForSource(source, fileOrUrl) {
  */
 async function createBookFromBlocks(title, blocks) {
   state.materialName = title;
-  state.pdfDoc = null;
-  state.pages = [{ pageNumber: 1, blocks }];
+  state.pages = [{ pageNumber: 1, blocks, sourceId: null, sourcePageIndex: null, buildState: 'editing' }];
 
   // 不自行產生 id —— books.id 是 uuid 型欄位，交給資料庫的
   // default gen_random_uuid() 生成，這裡用回傳結果設定 currentBookId。
@@ -1540,9 +1818,7 @@ addMaterialBtn.addEventListener('click', async () => {
   renderStepper(1);
   showScreen('screen-converting');
   try {
-    const arrayBuffer = await selectedFile.arrayBuffer();
-    state.pendingPdfBytes = new Uint8Array(arrayBuffer); // 暫存，僅供本地渲染左側 PDF 畫面用，不存進 Repository
-    await convertMaterial(state.pendingPdfBytes);
+    await convertMaterial(selectedFile);
   } catch (err) {
     console.error('轉換過程發生錯誤:', err);
     setConvertStatus('轉換失敗');
@@ -1637,30 +1913,118 @@ async function tryExtractPdfPageText(pdf, pageNumber) {
   }));
 }
 
-async function convertMaterial(pdfData) {
-  setConvertStatus('讀取教材檔案...');
-  const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
-  state.pdfDoc = pdf;
-  logConvert(`共 ${pdf.numPages} 頁`);
+// ============================================================
+// Parser Registry — 整個教材魔法書架構唯一的判斷點。
+//
+// 不是「這個來源是什麼格式」決定流程，是「這個來源有沒有免費 Parser」
+// 決定流程。新增任何來源格式（EPUB／Google Docs／網頁／YouTube 字幕……），
+// 只需要在這裡新增一行對應的 Parser 函式，convertMaterial、
+// handleAddSource、renderEditPage、Editor 完全不需要修改。
+//
+// Parser 簽名：async (file) => { pagesBlocks: (Block[]|null)[], fileBytes }
+//   pagesBlocks 裡某頁是 null，代表那一頁沒有抽到文字，個別進
+//   waiting_choice，其他頁正常顯示 —— 不是整份來源一起失敗。
+//
+// 目前免費取得文字規則（依產品規格）：
+//   PDF（文字層）✅／PDF（掃描）❌／Word ✅／TXT ✅／Excel ✅／
+//   PowerPoint ✅／圖片 ❌（OCR 屬於付費 AI 選項，不是免費 Parser）
+// ============================================================
+const SOURCE_PARSERS = {
+  pdf: parsePdfSource,
+  txt: parseTxtSource,
+  word: parseOfficeDocumentSource,
+  pptx: parseOfficeDocumentSource,
+  xlsx: parseOfficeDocumentSource,
+  // image：故意不列在這裡 —— 圖片沒有免費取得文字的方式，
+  // OCR 屬於付費的 AI 辨識選項，查不到 Parser 時 processSource
+  // 會自動視為「沒有免費方式」，交給老師選擇。
+};
 
-  // 對每一頁先嘗試直接抽取文字（PDF 文字版的情況）。
-  // 抽得到文字：直接使用，老師進編輯模式看到的就是現成內容，不需要選擇建立方式。
-  // 抽不到文字（掃描／圖片型 PDF）：blocks 設為 null，老師翻到該頁時
-  // 才看到「AI 辨識／自己輸入／貼上文字」的選擇畫面 —— 跟之前的設計一致，
-  // 只是現在真正執行了文字抽取這個判斷步驟，而不是一律當作沒有文字。
-  setConvertStatus('嘗試直接讀取文字...');
-  state.pages = [];
-  for (let idx = 0; idx < pdf.numPages; idx++) {
-    const pageNumber = idx + 1;
-    const extractedBlocks = await tryExtractPdfPageText(pdf, pageNumber);
-    state.pages.push({
-      pageNumber,
-      originalPdfPage: pageNumber,
-      blocks: extractedBlocks, // 有文字就是陣列，沒有文字維持 null
-    });
+async function parsePdfSource(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfBytes = new Uint8Array(arrayBuffer);
+  const pdf = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
+
+  const pagesBlocks = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    pagesBlocks.push(await tryExtractPdfPageText(pdf, i));
   }
-  const pagesWithText = state.pages.filter(p => p.blocks !== null).length;
-  logConvert(`✓ ${pagesWithText} / ${pdf.numPages} 頁成功直接讀到文字`);
+  return { pagesBlocks, fileBytes: pdfBytes };
+}
+
+async function parseTxtSource(textContent) {
+  // 純文字來源本身就是文字，不需要「讀取檔案」這一步的額外處理
+  const blocks = pastedTextToBlocks(textContent, 1);
+  return { pagesBlocks: [blocks], fileBytes: null };
+}
+
+/**
+ * Word／PowerPoint／Excel 共用同一個 Parser ——
+ * 「讀取來源」這一步對這三種格式來說都是同一個動作（呼叫 officeParser
+ * 取出純文字），差別只在副檔名，officeParser 自己會依檔案內容判斷格式。
+ * 取出的純文字交給跟 TXT／貼上文字相同的 Normalize 規則（依空行分段），
+ * 不需要為每種格式各寫一套切段邏輯。
+ */
+async function parseOfficeDocumentSource(file) {
+  const officeParser = await getOfficeParserLib();
+  const arrayBuffer = await file.arrayBuffer();
+
+  let text;
+  try {
+    text = await officeParser.parseOfficeAsync(arrayBuffer);
+  } catch (err) {
+    // 解析失敗（例如檔案損毀、格式不符）：視為這個來源沒有免費文字，
+    // 交給老師選擇 AI／手動／貼上文字，不讓例外往外拋壞掉整個流程。
+    console.warn('文件解析失敗，交由老師選擇建立方式：', err.message);
+    return { pagesBlocks: [null], fileBytes: new Uint8Array(arrayBuffer) };
+  }
+
+  if (!text || !text.trim()) {
+    return { pagesBlocks: [null], fileBytes: new Uint8Array(arrayBuffer) };
+  }
+
+  // Word／PowerPoint／Excel 目前都先視為單頁來源（一個檔案 = 教材的一頁）。
+  // 這跟 PDF 不同 —— PDF 有明確的實體頁碼，這三種格式沒有，
+  // 之後若要支援「依章節/投影片/工作表切成多頁」，只需要調整這個
+  // Parser 內部的切分邏輯，不影響其他來源或 Editor。
+  const blocks = pastedTextToBlocks(text, 1);
+  return { pagesBlocks: [blocks], fileBytes: new Uint8Array(arrayBuffer) };
+}
+
+/**
+ * 統一的來源處理流程，所有來源共用，不分格式：
+ *   有對應 Parser → 嘗試免費取得文字 → 逐頁判斷成功/失敗
+ *   沒有對應 Parser → 每一頁直接視為失敗，交給老師選擇
+ *
+ * 回傳：{ pageResults: [{ blocks, buildState }], fileBytes }
+ */
+async function processSource(sourceType, fileOrText) {
+  const parser = SOURCE_PARSERS[sourceType];
+
+  if (!parser) {
+    // 沒有免費 Parser：這個來源永遠交給老師選擇（AI／手動／貼上文字）
+    return { pageResults: [{ blocks: [], buildState: 'waiting_choice' }], fileBytes: null };
+  }
+
+  const { pagesBlocks, fileBytes } = await parser(fileOrText);
+  const pageResults = pagesBlocks.map(blocks =>
+    blocks
+      ? { blocks, buildState: 'editing' }
+      : { blocks: [], buildState: 'waiting_choice' }
+  );
+  return { pageResults, fileBytes };
+}
+
+async function convertMaterial(file) {
+  setConvertStatus('讀取教材檔案...');
+
+  // 唯一因來源而異的步驟交給 Parser Registry 處理 ——
+  // convertMaterial 本身完全不需要知道這是 PDF 還是其他格式，
+  // 只需要呼叫統一的 processSource，跟「新增來源」走的是同一條路。
+  setConvertStatus('嘗試直接讀取文字...');
+  const { pageResults, fileBytes } = await processSource('pdf', file);
+  const pagesWithText = pageResults.filter(p => p.buildState === 'editing').length;
+  logConvert(`共 ${pageResults.length} 頁，${pagesWithText} 頁成功直接讀到文字`);
 
   setConvertStatus('準備完成，進入編輯模式...');
   await new Promise(r => setTimeout(r, 300));
@@ -1670,6 +2034,26 @@ async function convertMaterial(pdfData) {
   // default gen_random_uuid() 生成，這裡用回傳結果設定 currentBookId。
   const savedBook = await bookRepository.saveBook({ title: state.materialName });
   state.currentBookId = savedBook.id;
+
+  // 這份 PDF 是這本書的第一個 Source。一本書可以有多個來源，
+  // 這次只是第一次建立時自動建立第一個來源，跟之後在 Editor 內
+  // 「＋ 新增來源」走的是同一套 addSource + insertPagesAfter 流程。
+  const source = await bookRepository.addSource(state.currentBookId, 'pdf', file.name);
+  if (fileBytes) {
+    state.sourceFilesById = state.sourceFilesById || {};
+    state.sourceFilesById[source.id] = fileBytes;
+  }
+
+  const pageBlocksList = pageResults.map(p => p.blocks);
+  await bookRepository.insertPagesAfter(state.currentBookId, 0, source.id, pageBlocksList);
+  const savedBookWithPages = await bookRepository.loadBook(state.currentBookId);
+
+  // loadBook() 回傳的 pages 只有 blocks（教材內容），buildState 是前端流程
+  // 控制用的欄位，這裡依剛才文字抽取的結果補上，不存進資料庫。
+  state.pages = savedBookWithPages.pages.map((p, idx) => ({
+    ...p,
+    buildState: pageResults[idx]?.buildState ?? 'editing',
+  }));
 
   renderStepper(2);
   state.currentEditPage = 1;
@@ -1756,15 +2140,65 @@ function paragraphsToBlocks(paragraphResults, pageNumber) {
  *
  * 這對應 PRD 流程：PDF → 找出文字區域 → 只裁切文字區 → OCR → Block
  */
+/**
+ * 取得指定頁面可供 AI 辨識的影像（canvas）。依這一頁所屬 Source 的類型，
+ * 決定怎麼把原始內容變成一張圖片：
+ *   PDF → 用 PDF.js 渲染該頁
+ *   圖片 → 直接讀取原始圖片
+ *   其他（Word／PowerPoint／Excel 等沒有「畫面」概念的格式，
+ *        或來源檔案已經遺失）→ 回傳 null，AI 辨識在這個情況下無法執行，
+ *        呼叫端要改引導老師使用手動輸入或貼上文字。
+ */
+async function getPageImageForAi(pageData) {
+  if (!pageData.sourceId) return null;
+  const source = await getSourceById(pageData.sourceId);
+  if (!source) return null;
+
+  if (source.type === 'pdf') {
+    const pdfBytes = state.sourceFilesById?.[pageData.sourceId];
+    if (!pdfBytes) return null;
+    const pdf = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
+    const page = await pdf.getPage(pageData.sourcePageIndex || 1);
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+    return canvas;
+  }
+
+  if (source.type === 'image') {
+    const imageBytes = state.sourceFilesById?.[pageData.sourceId];
+    if (!imageBytes) return null;
+    const blob = new Blob([imageBytes]);
+    const bitmap = await createImageBitmap(blob);
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    return canvas;
+  }
+
+  // Word／PowerPoint／Excel 等沒有「畫面」概念的格式：AI 辨識（OCR）
+  // 對這類格式本身不適用 —— 免費 Parser 已經是這些格式取得文字的方式，
+  // 如果免費 Parser 都失敗了，OCR 也無法處理，只能引導老師手動輸入或貼上文字。
+  return null;
+}
+
 async function runOcrForPage(pageNum) {
   const pageData = state.pages.find(p => p.pageNumber === pageNum);
-  const page = await state.pdfDoc.getPage(pageData.originalPdfPage);
-  const viewport = page.getViewport({ scale: 2 });
+  const fullPageCanvas = await getPageImageForAi(pageData);
 
-  const fullPageCanvas = document.createElement('canvas');
-  fullPageCanvas.width = viewport.width;
-  fullPageCanvas.height = viewport.height;
-  await page.render({ canvasContext: fullPageCanvas.getContext('2d'), viewport }).promise;
+  if (!fullPageCanvas) {
+    // 這個來源沒有可供 AI 辨識的影像（例如 Word/Excel，或原始檔案已遺失）
+    const blocks = [{
+      id: `p${pageNum}-b1`,
+      type: 'text',
+      text: '（這個來源無法使用 AI 辨識，請改用手動輸入或貼上文字）',
+    }];
+    pageData.blocks = blocks;
+    return blocks;
+  }
 
   const worker = await getOcrWorker();
 
@@ -1780,7 +2214,7 @@ async function runOcrForPage(pageNum) {
     const blocks = fallbackText
       ? [{ id: `p${pageNum}-b1`, type: 'text', text: fallbackText }]
       : [{ id: `p${pageNum}-b1`, type: 'text', text: '（這一頁沒有偵測到文字，請手動輸入或檢查左側原始教材）' }];
-    state.pages.find(p => p.pageNumber === pageNum).blocks = blocks;
+    pageData.blocks = blocks;
     return blocks;
   }
 
@@ -1798,7 +2232,7 @@ async function runOcrForPage(pageNum) {
   }
 
   const blocks = paragraphsToBlocks(paragraphResults, pageNum);
-  state.pages.find(p => p.pageNumber === pageNum).blocks = blocks;
+  pageData.blocks = blocks;
   return blocks;
 }
 
@@ -1809,31 +2243,21 @@ async function renderEditPage(pageNum) {
   state.currentEditPage = pageNum;
   const pageData = state.pages.find(p => p.pageNumber === pageNum);
 
-  const pdfPane = document.querySelector('#screen-edit .pdf-pane');
-  if (state.pdfDoc && pageData.originalPdfPage) {
-    pdfPane.style.display = '';
-    const page = await state.pdfDoc.getPage(pageData.originalPdfPage);
-    const viewport = page.getViewport({ scale: 1.5 });
-    const canvas = document.getElementById('editPdfCanvas');
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-  } else {
-    // 「直接開始編輯」沒有原始來源檔案，左側不顯示 PDF 畫面，
-    // 對應 Editor Feature Design：純文字教材預設使用純文字模式（全寬）。
-    pdfPane.style.display = 'none';
-  }
+  await renderSourceViewer(pageData);
 
   document.getElementById('editPageIndicator').textContent = `第 ${pageNum} / ${state.pages.length} 頁`;
   document.getElementById('editPrevBtn').disabled = pageNum <= 1;
   document.getElementById('editNextBtn').disabled = pageNum >= state.pages.length;
+  document.getElementById('movePageUpBtn').disabled = pageNum <= 1;
+  document.getElementById('movePageDownBtn').disabled = pageNum >= state.pages.length;
 
   const container = document.getElementById('editBlocks');
 
-  // 這一頁還沒建立過內容：顯示「AI 幫忙建立／自己手動建立」選擇畫面，
-  // 不自動執行任何 OCR。只有使用者明確選擇後才會有對應動作。
-  if (pageData.blocks === null) {
-    showBuildChoiceForPage(pageNum, container);
+  // buildState 是流程控制欄位（不存資料庫），跟 blocks（教材內容本身）分開：
+  // 'waiting_choice' 代表免費文字抽取失敗，老師翻到這頁時看到
+  // AI／手動輸入／貼上文字的選擇畫面；其他情況直接顯示目前的 blocks。
+  if (pageData.buildState === 'waiting_choice') {
+    await showBuildChoiceForPage(pageNum, container);
     return;
   }
 
@@ -1841,25 +2265,153 @@ async function renderEditPage(pageNum) {
 }
 
 /**
+ * 左側 Viewer — 依「這一頁屬於哪個 Source」動態決定怎麼顯示原始教材，
+ * 不再依賴一個全域唯一的 state.pdfDoc。
+ *
+ * 這是這次重構的核心：Source 負責提供原始教材的顯示方式（PDF 用
+ * PDF.js 渲染、圖片直接顯示、純文字沒有原始檔案可顯示……），Editor／
+ * Blocks 完全不需要知道、也不參與這個邏輯，左右兩側永遠對應同一頁，
+ * 不會因為教材由多個不同來源組成而錯位。
+ */
+async function renderSourceViewer(pageData) {
+  const pdfPane = document.querySelector('#screen-edit .pdf-pane');
+  const sourceId = pageData.sourceId;
+
+  if (!sourceId) {
+    // 沒有來源（例如「直接開始編輯」建立的頁，或老師自己新增的純文字頁）
+    // —— 左側不顯示任何原始教材畫面，對應 Editor Feature Design：
+    // 純文字教材預設使用純文字模式（全寬）。
+    pdfPane.style.display = 'none';
+    return;
+  }
+
+  const source = await getSourceById(sourceId);
+  if (!source) {
+    pdfPane.style.display = 'none';
+    return;
+  }
+
+  if (source.type === 'pdf') {
+    const pdfBytes = state.sourceFilesById?.[sourceId];
+    if (!pdfBytes) {
+      // 這份來源的原始檔案目前不在前端記憶體中（例如重新整理頁面後遺失，
+      // 因為原始檔案的持久化儲存屬於 Storage 的職責，不在這次範圍內）。
+      pdfPane.style.display = '';
+      const canvas = document.getElementById('editPdfCanvas');
+      canvas.width = 400;
+      canvas.height = 200;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#f5f5f5';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#999';
+      ctx.font = '14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('原始 PDF 暫時無法顯示', canvas.width / 2, canvas.height / 2);
+      return;
+    }
+    pdfPane.style.display = '';
+    const pdf = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
+    const page = await pdf.getPage(pageData.sourcePageIndex || 1);
+    const viewport = page.getViewport({ scale: 1.5 });
+    const canvas = document.getElementById('editPdfCanvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+    return;
+  }
+
+  if (source.type === 'image') {
+    const imageBytes = state.sourceFilesById?.[sourceId];
+    pdfPane.style.display = '';
+    const canvas = document.getElementById('editPdfCanvas');
+    if (imageBytes) {
+      const blob = new Blob([imageBytes]);
+      const bitmap = await createImageBitmap(blob);
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    } else {
+      drawSourcePlaceholder(canvas, '🖼', source.filePath || '圖片', '原始圖片暫時無法顯示');
+    }
+    return;
+  }
+
+  // Word／PowerPoint／Excel：目前還沒有渲染原始排版的能力，
+  // 但依規格第四點「左側永遠顯示目前頁所屬 Source 的內容」，
+  // 至少要讓老師看到「這一頁來自哪個來源」，不是完全空白。
+  const sourceLabelMap = { word: '📝 Word', pptx: '📊 PowerPoint', xlsx: '📈 Excel', txt: '📄 純文字' };
+  if (sourceLabelMap[source.type]) {
+    pdfPane.style.display = '';
+    const canvas = document.getElementById('editPdfCanvas');
+    drawSourcePlaceholder(canvas, sourceLabelMap[source.type], source.filePath || '（無檔名）', '原始檔案排版預覽尚未支援');
+    return;
+  }
+
+  pdfPane.style.display = 'none';
+}
+
+/**
+ * 在左側畫一個簡單的來源資訊卡：圖示＋檔名＋說明文字。
+ * 用於還沒有真正排版渲染能力的來源格式，至少讓老師知道
+ * 「這一頁來自哪個來源」，不是完全空白，呼應左右永遠同步的原則。
+ */
+function drawSourcePlaceholder(canvas, iconLabel, fileName, note) {
+  canvas.width = 360;
+  canvas.height = 220;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#f5f5f5';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#333';
+  ctx.font = '32px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(iconLabel, canvas.width / 2, 80);
+  ctx.font = '14px sans-serif';
+  ctx.fillStyle = '#555';
+  ctx.fillText(fileName, canvas.width / 2, 120);
+  ctx.fillStyle = '#999';
+  ctx.font = '12px sans-serif';
+  ctx.fillText(note, canvas.width / 2, 150);
+}
+
+/**
+ * 取得指定 sourceId 對應的 Source 資料，並快取在 state.sourcesById，
+ * 避免每次翻頁都重新查詢 Repository。
+ */
+async function getSourceById(sourceId) {
+  state.sourcesById = state.sourcesById || {};
+  if (state.sourcesById[sourceId]) return state.sourcesById[sourceId];
+
+  const sources = await bookRepository.listSources(state.currentBookId);
+  for (const s of sources) {
+    state.sourcesById[s.id] = s;
+  }
+  return state.sourcesById[sourceId] || null;
+}
+
+/**
  * 顯示「這一頁該怎麼建立內容」的選擇畫面。
  * 對應 PRD：圖片型教材建立流程 — AI 自動辨識（扣點）／自行建立（免費），由使用者選擇。
  * 文案以老師的角度描述，不出現技術細節（OCR、token、AI 模型等字眼）。
  */
-function showBuildChoiceForPage(pageNum, container) {
+async function showBuildChoiceForPage(pageNum, container) {
   const points = estimatePointsForPage();
+  const pageData = state.pages.find(p => p.pageNumber === pageNum);
+  const canUseAi = await checkAiAvailableForPage(pageData);
 
   container.innerHTML = `
     <div class="build-choice">
       <div class="build-choice-title">這一頁還沒有文字內容</div>
-      <div class="build-choice-desc">這份教材這一頁是圖片，沒有現成的文字。請選擇要怎麼把文字建立起來：</div>
+      <div class="build-choice-desc">這個來源沒有現成的文字，請選擇要怎麼把文字建立起來：</div>
 
-      <div class="build-choice-option">
+      <div class="build-choice-option${canUseAi ? '' : ' build-choice-option-disabled'}">
         <div class="build-choice-option-header">
           <strong>🤖 讓 AI 幫我打好文字</strong>
-          <span class="points-badge">${points} 點／頁</span>
+          <span class="points-badge${canUseAi ? '' : ' free'}">${canUseAi ? `${points} 點／頁` : '此來源不適用'}</span>
         </div>
-        <div class="build-choice-option-desc">AI 會自動讀出這一頁的文字，並幫你分好段落，你只需要檢查一下、修正小錯字就好，省下大部分輸入的時間。</div>
-        <button class="primary-btn" id="startAiRecognizeBtn">讓 AI 幫忙建立（${points} 點）</button>
+        <div class="build-choice-option-desc">${canUseAi
+          ? 'AI 會自動讀出這一頁的文字，並幫你分好段落，你只需要檢查一下、修正小錯字就好，省下大部分輸入的時間。'
+          : '這種來源格式目前無法使用 AI 辨識，請改用手動輸入或貼上文字。'}</div>
+        <button class="${canUseAi ? 'primary-btn' : 'secondary-btn'}" id="startAiRecognizeBtn" ${canUseAi ? '' : 'disabled'}>${canUseAi ? `讓 AI 幫忙建立（${points} 點）` : '無法使用 AI'}</button>
       </div>
 
       <div class="build-choice-option">
@@ -1882,13 +2434,15 @@ function showBuildChoiceForPage(pageNum, container) {
     </div>
   `;
 
-  document.getElementById('startAiRecognizeBtn').addEventListener('click', async () => {
-    await runAiRecognitionForPage(pageNum, container);
-  });
+  if (canUseAi) {
+    document.getElementById('startAiRecognizeBtn').addEventListener('click', async () => {
+      await runAiRecognitionForPage(pageNum, container);
+    });
+  }
   document.getElementById('startManualBuildBtn').addEventListener('click', () => {
     const pageData = state.pages.find(p => p.pageNumber === pageNum);
     pageData.blocks = createManualBlankBlocks(pageNum);
-    pageData.buildMethod = 'manual';
+    pageData.buildState = 'editing'; // 老師已經選擇了建立方式，流程完成，回到正常編輯狀態
     renderBlocksIntoContainer(pageData.blocks, container, pageNum);
     // 老師按下「自己輸入」後，下一秒就要能直接打字，不需要再點擊任何東西
     focusLastTextarea(container);
@@ -1896,6 +2450,18 @@ function showBuildChoiceForPage(pageNum, container) {
   document.getElementById('startPasteBuildBtn').addEventListener('click', () => {
     showPasteTextScreen(pageNum, container);
   });
+}
+
+/**
+ * 判斷這一頁能不能使用 AI 辨識 —— 只有「有畫面可以辨識」的來源才適用
+ * （PDF、圖片），Word／PowerPoint／Excel 這類沒有「畫面」概念的格式，
+ * 免費 Parser 都失敗了，AI／OCR 同樣無法處理，不應該讓老師點了才發現沒用。
+ */
+async function checkAiAvailableForPage(pageData) {
+  if (!pageData.sourceId) return false;
+  const source = await getSourceById(pageData.sourceId);
+  if (!source) return false;
+  return source.type === 'pdf' || source.type === 'image';
 }
 
 /**
@@ -1921,12 +2487,12 @@ function showPasteTextScreen(pageNum, container) {
     const blocks = pastedTextToBlocks(rawText, pageNum);
     const pageData = state.pages.find(p => p.pageNumber === pageNum);
     pageData.blocks = blocks;
-    pageData.buildMethod = 'paste';
+    pageData.buildState = 'editing';
     renderBlocksIntoContainer(blocks, container, pageNum);
   });
 
-  document.getElementById('cancelPasteBtn').addEventListener('click', () => {
-    showBuildChoiceForPage(pageNum, container);
+  document.getElementById('cancelPasteBtn').addEventListener('click', async () => {
+    await showBuildChoiceForPage(pageNum, container);
   });
 }
 
@@ -1964,7 +2530,8 @@ async function runAiRecognitionForPage(pageNum, container) {
     </div>`;
   const blocks = await runOcrForPage(pageNum);
   const pageData = state.pages.find(p => p.pageNumber === pageNum);
-  pageData.buildMethod = 'ai';
+  pageData.blocks = blocks; // 之前這裡遺漏了，AI 辨識結果沒有真正寫回 pageData
+  pageData.buildState = 'editing';
   renderBlocksIntoContainer(blocks, container, pageNum);
 }
 
@@ -2108,6 +2675,132 @@ document.getElementById('deletePageBtn').addEventListener('click', async () => {
   renderEditPage(nextPageToShow);
 });
 
+/**
+ * ＋ 新增來源 — 一本教材可以由多個不同來源組成（PDF／圖片／Word／
+ * PowerPoint／Excel／純文字／未來其他格式），不限制只能有一個 PDF。
+ * 按下後展開選單，選擇來源類型，依該類型走對應的「取得文字」方式，
+ * 最後統一收斂成 insertPagesAfter，插在目前正在編輯的這一頁之後。
+ */
+document.getElementById('insertPageBtn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  document.getElementById('sourcePicker').classList.toggle('show');
+});
+document.addEventListener('click', (e) => {
+  const picker = document.getElementById('sourcePicker');
+  if (picker && !picker.contains(e.target) && e.target.id !== 'insertPageBtn') {
+    picker.classList.remove('show');
+  }
+});
+
+document.querySelectorAll('.source-picker-option').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    document.getElementById('sourcePicker').classList.remove('show');
+    const sourceType = btn.dataset.sourceType;
+    await handleAddSource(sourceType);
+  });
+});
+
+/**
+ * 依選擇的來源類型，觸發對應的取得方式（目前 PDF／純文字已支援真正流程，
+ * 其他格式先用瀏覽器原生 file input 讓老師選檔，文字擷取以占位內容頂著，
+ * 跟「七種建立方式」那一輪的處理原則一致）。
+ */
+async function handleAddSource(sourceType) {
+  if (sourceType === 'txt') {
+    const text = prompt('請貼上這個來源的文字內容（段落之間請空一行）：');
+    if (text === null) return;
+    const { pageResults, fileBytes } = await processSource('txt', text);
+    await insertNewSource(sourceType, null, pageResults, fileBytes);
+    return;
+  }
+
+  // 其他格式都需要先選檔，選完後統一交給 processSource 判斷
+  const input = document.createElement('input');
+  input.type = 'file';
+  const acceptMap = {
+    pdf: 'application/pdf',
+    image: 'image/*',
+    word: '.doc,.docx',
+    pptx: '.ppt,.pptx',
+    xlsx: '.xls,.xlsx',
+  };
+  input.accept = acceptMap[sourceType] || '*/*';
+
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    const { pageResults, fileBytes } = await processSource(sourceType, file);
+    await insertNewSource(sourceType, file.name, pageResults, fileBytes);
+  };
+  input.click();
+}
+
+/**
+ * 把一個新來源（及它產生的頁面）真正插入到教材裡，插在目前正在編輯的
+ * 這一頁之後。完成後自動跳到新增的第一頁。
+ *
+ * pageResults 是 [{ blocks, buildState }] 陣列 —— blocks 永遠存進
+ * Repository（教材內容本身），buildState 是前端流程控制欄位，
+ * loadBook() 不會回傳它，這裡要在重新載入後手動補回去。
+ */
+async function insertNewSource(sourceType, fileLabel, pageResults, fileBytes) {
+  await savePageBeforeLeaving(state.currentEditPage);
+
+  const source = await bookRepository.addSource(state.currentBookId, sourceType, fileLabel);
+
+  // 原始檔案位元組，先暫存在前端記憶體供左側 Viewer 渲染使用
+  // （正式的檔案儲存／讀取屬於 Storage 的職責，這次先聚焦在左右同步的架構）。
+  if (fileBytes) {
+    state.sourceFilesById = state.sourceFilesById || {};
+    state.sourceFilesById[source.id] = fileBytes;
+  }
+
+  const afterPageNumber = state.currentEditPage;
+  const pageBlocksList = pageResults.map(p => p.blocks);
+  await bookRepository.insertPagesAfter(
+    state.currentBookId,
+    afterPageNumber,
+    source.id,
+    pageBlocksList
+  );
+
+  const updatedBook = await bookRepository.loadBook(state.currentBookId);
+  // 把剛才算好的 buildState 對應補回新插入的那幾頁（其他既有頁面維持
+  // 原來的 buildState，因為 loadBook() 不認識這個前端專屬欄位）。
+  const existingBuildStates = new Map(state.pages.map(p => [p.pageNumber, p.buildState]));
+  state.pages = updatedBook.pages.map(p => {
+    const isNewPage = p.pageNumber > afterPageNumber && p.pageNumber <= afterPageNumber + pageResults.length;
+    if (isNewPage) {
+      const resultIndex = p.pageNumber - afterPageNumber - 1;
+      return { ...p, buildState: pageResults[resultIndex].buildState };
+    }
+    return { ...p, buildState: existingBuildStates.get(p.pageNumber) ?? 'editing' };
+  });
+
+  const firstNewPageNumber = afterPageNumber + 1;
+  await renderEditPage(firstNewPageNumber);
+}
+
+/**
+ * 上移／下移 — 調整這一頁在教材中的順序。
+ * 在最前/最後一頁時，對應方向的按鈕會被停用，不會觸發任何動作。
+ */
+document.getElementById('movePageUpBtn').addEventListener('click', async () => {
+  await savePageBeforeLeaving(state.currentEditPage);
+  await bookRepository.movePage(state.currentBookId, state.currentEditPage, 'up');
+  const updatedBook = await bookRepository.loadBook(state.currentBookId);
+  state.pages = updatedBook.pages;
+  await renderEditPage(state.currentEditPage - 1);
+});
+
+document.getElementById('movePageDownBtn').addEventListener('click', async () => {
+  await savePageBeforeLeaving(state.currentEditPage);
+  await bookRepository.movePage(state.currentBookId, state.currentEditPage, 'down');
+  const updatedBook = await bookRepository.loadBook(state.currentBookId);
+  state.pages = updatedBook.pages;
+  await renderEditPage(state.currentEditPage + 1);
+});
+
 document.getElementById('saveBtn').addEventListener('click', async () => {
   // 教材基本資料（標題）與目前頁面的 Blocks 分開儲存 —— 對應 Schema：
   // books（title 等）與 pages（blocks）是兩張表，各自獨立的儲存動作。
@@ -2150,18 +2843,79 @@ function blocksToReadHtml(blocks) {
 async function renderReadPage(pageNum) {
   state.currentReadPage = pageNum;
   const pageData = state.pages.find(p => p.pageNumber === pageNum);
-  const page = await state.pdfDoc.getPage(pageData.originalPdfPage);
-  const viewport = page.getViewport({ scale: 1.5 });
-  const canvas = document.getElementById('readPdfCanvas');
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
-  await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+
+  await renderReadSourceViewer(pageData);
 
   document.getElementById('readBlocks').innerHTML = blocksToReadHtml(pageData.blocks);
 
   document.getElementById('readPageIndicator').textContent = `第 ${pageNum} / ${state.pages.length} 頁`;
   document.getElementById('readPrevBtn').disabled = pageNum <= 1;
   document.getElementById('readNextBtn').disabled = pageNum >= state.pages.length;
+}
+
+/**
+ * 閱讀模式的左側 Viewer —— 跟 Editor 的 renderSourceViewer 是同一套邏輯
+ * （依這一頁的 sourceId 動態決定怎麼顯示原始教材），差別只在於畫面元素
+ * 是 #screen-read 裡的 .pdf-pane／readPdfCanvas，不是編輯模式那一份。
+ */
+async function renderReadSourceViewer(pageData) {
+  const pdfPane = document.querySelector('#screen-read .pdf-pane');
+  const sourceId = pageData.sourceId;
+
+  if (!sourceId) {
+    pdfPane.style.display = 'none';
+    return;
+  }
+
+  const source = await getSourceById(sourceId);
+  if (!source) {
+    pdfPane.style.display = 'none';
+    return;
+  }
+
+  if (source.type === 'pdf') {
+    const pdfBytes = state.sourceFilesById?.[sourceId];
+    const canvas = document.getElementById('readPdfCanvas');
+    if (!pdfBytes) {
+      pdfPane.style.display = '';
+      drawSourcePlaceholder(canvas, '📄', source.filePath || 'PDF', '原始 PDF 暫時無法顯示');
+      return;
+    }
+    pdfPane.style.display = '';
+    const pdf = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
+    const page = await pdf.getPage(pageData.sourcePageIndex || 1);
+    const viewport = page.getViewport({ scale: 1.5 });
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+    return;
+  }
+
+  if (source.type === 'image') {
+    const imageBytes = state.sourceFilesById?.[sourceId];
+    pdfPane.style.display = '';
+    const canvas = document.getElementById('readPdfCanvas');
+    if (imageBytes) {
+      const blob = new Blob([imageBytes]);
+      const bitmap = await createImageBitmap(blob);
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    } else {
+      drawSourcePlaceholder(canvas, '🖼', source.filePath || '圖片', '原始圖片暫時無法顯示');
+    }
+    return;
+  }
+
+  const sourceLabelMap = { word: '📝 Word', pptx: '📊 PowerPoint', xlsx: '📈 Excel', txt: '📄 純文字' };
+  if (sourceLabelMap[source.type]) {
+    pdfPane.style.display = '';
+    const canvas = document.getElementById('readPdfCanvas');
+    drawSourcePlaceholder(canvas, sourceLabelMap[source.type], source.filePath || '（無檔名）', '原始檔案排版預覽尚未支援');
+    return;
+  }
+
+  pdfPane.style.display = 'none';
 }
 
 document.getElementById('readPrevBtn').addEventListener('click', () => {
