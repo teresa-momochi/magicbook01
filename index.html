@@ -618,12 +618,11 @@
       <button id="insertPageBtn" title="新增一個教材來源">＋ 新增來源</button>
       <div class="source-picker" id="sourcePicker">
         <div class="source-picker-title">選擇教材來源</div>
-        <button class="source-picker-option" data-source-type="pdf">📄 PDF</button>
-        <button class="source-picker-option" data-source-type="image" disabled>🖼 圖片</button>
-        <button class="source-picker-option" data-source-type="word" disabled>📝 Word</button>
+        <button class="source-picker-option" data-source-type="word">📝 Word</button>
+        <button class="source-picker-option" data-source-type="txt">📄 純文字</button>
+        <button class="source-picker-option" data-source-type="image">🖼 圖片</button>
         <button class="source-picker-option" data-source-type="pptx" disabled>📊 PowerPoint</button>
         <button class="source-picker-option" data-source-type="xlsx" disabled>📈 Excel</button>
-        <button class="source-picker-option" data-source-type="txt">📄 純文字</button>
       </div>
       <button id="deletePageBtn" class="delete-page-btn">🗑 刪除本頁</button>
     </div>
@@ -2778,7 +2777,6 @@ async function handleAddSource(sourceType) {
   const input = document.createElement('input');
   input.type = 'file';
   const acceptMap = {
-    pdf: 'application/pdf',
     image: 'image/*',
     word: '.doc,.docx',
     pptx: '.ppt,.pptx',
