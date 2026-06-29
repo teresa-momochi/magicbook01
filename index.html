@@ -2937,7 +2937,32 @@ function showPasteTextScreen(pageNum, container) {
  *
  * 不要求同一份文字裡的題號格式一致 —— 只要某個位置符合任何一種合法
  * 格式，就視為新題目的開始，即使前後混用不同寫法也照樣切分。
+/**
+ * 判斷一段貼上的文字「看起來是不是教材內容」—— 不是依切分結果反推
+ * （例如「只切出1段就不算」），是直接偵測文字本身有沒有 parser 認得的
+ * 結構特徵：含有空行、或含有任何題號格式。只要符合任一特徵，就視為
+ * 教材內容，交給 pastedTextToBlocks() 處理 —— 即使最後只切出一段
+ * （例如貼上的剛好只有一題），也算是「被 parser 處理過」，跟「維持
+ * 瀏覽器原生貼上行為」是不同的路徑，不會因為段落數量而改變判斷。
  *
+ * 之後 parser 增加更多教材辨識能力（例如偵測選擇題 A/B/C/D 選項、
+ * 表格等結構），只需要在這裡加新的特徵判斷，不需要更動切分邏輯本身，
+ * 也不需要更動下面 textarea 貼上事件的攔截邏輯。
+ */
+function looksLikeStructuredMaterial(text) {
+  if (/\n\s*\n/.test(text)) return true; // 含有空行，代表有明確分段
+
+  // 跟 splitByQuestionNumber 用同一組題號判斷規則，確保「要不要走
+  // parser」跟「parser 實際怎麼切」永遠一致，不會出現判斷說「是教材」
+  // 但切分邏輯卻切不出東西的矛盾情況。
+  const chineseNum = '[一二三四五六七八九十百]+';
+  const questionNumberPattern = new RegExp(
+    `\\d+[.)](?!\\d)|\\(\\d+\\)|${chineseNum}、|Q\\d+(?=\\s)`
+  );
+  return questionNumberPattern.test(text);
+}
+
+/**
  * 排除「句子中間的數字」誤判的關鍵：
  *   - 「數字.」「數字)」後面不能緊跟數字（避免 1.5、2.3 這種小數
  *     或版本號被誤判成題號 1.、2.）
@@ -3074,6 +3099,35 @@ function renderBlocksIntoContainer(blocks, container, pageNum) {
     textarea.addEventListener('input', () => {
       block.text = textarea.value;
     });
+
+    // 貼上時，先判斷內容是不是結構化教材（含題號／空行分段），
+    // 是的話攔截原生貼上行為，改用 pastedTextToBlocks() 切分成多個
+    // Block；不是結構化教材的一般文字，維持瀏覽器原生貼上不干預。
+    // 跟「📋 貼上文字」按鈕共用同一套切分邏輯，老師不需要特別記得
+    // 要用哪個入口 —— 直接在欄位裡 Ctrl+V 就能享有相同的自動分段效果。
+    textarea.addEventListener('paste', (e) => {
+      const pastedText = e.clipboardData?.getData('text');
+      if (!pastedText || !looksLikeStructuredMaterial(pastedText)) return; // 一般文字，不攔截
+
+      e.preventDefault();
+      const newBlocks = pastedTextToBlocks(pastedText, pageNum).map(b => ({
+        ...b,
+        id: `${block.id}-paste-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      }));
+
+      const isCurrentBlockEmpty = !block.text.trim();
+      if (isCurrentBlockEmpty) {
+        // 目前這個 Block 本來是空的（例如剛按過「＋新增 Block」）：
+        // 直接用切分出來的內容取代它，不留下一個多餘的空欄位。
+        pageData.blocks.splice(index, 1, ...newBlocks);
+      } else {
+        // 目前這個 Block 已經有內容：把切分出來的新內容插入在它後面，
+        // 不覆蓋老師已經打好的文字。
+        pageData.blocks.splice(index + 1, 0, ...newBlocks);
+      }
+      rerender();
+    });
+
     row.appendChild(textarea);
     container.appendChild(row);
 
