@@ -471,7 +471,10 @@
 <div class="screen" id="screen-mybooks">
   <div class="mybooks-header">
     <h1>📚 我的魔法書</h1>
-    <button class="primary-btn" id="goToAddBookBtn" style="width:auto; padding:10px 22px;">＋ 新增教材</button>
+    <div style="display:flex; gap:8px;">
+      <button class="secondary-btn" id="goToTrashBtn">🗑 垃圾桶</button>
+      <button class="primary-btn" id="goToAddBookBtn" style="width:auto; padding:10px 22px;">＋ 新增教材</button>
+    </div>
   </div>
   <div class="mybooks-header" style="margin-top:-12px;">
     <span style="font-size:13px; color:#888;" id="loggedInAsLabel"></span>
@@ -480,6 +483,20 @@
   <div class="mybooks-quota" id="mybooksQuota"></div>
   <div class="mybooks-list" id="mybooksList">
     <div class="mybooks-empty">還沒有教材，點選「＋ 新增教材」開始建立第一本。</div>
+  </div>
+</div>
+
+<!-- ============ 畫面：垃圾桶 ============ -->
+<div class="screen" id="screen-trash">
+  <div class="mybooks-header">
+    <h1>🗑 垃圾桶</h1>
+    <button class="back-link" id="backToMyBooksFromTrashBtn">← 回到我的魔法書</button>
+  </div>
+  <p style="font-size:13px; color:#888; margin: 0 0 16px;">
+    刪除的教材會保留在這裡 90 天，期間可以隨時還原。超過 90 天後，系統會自動永久刪除，無法復原。
+  </p>
+  <div class="mybooks-list" id="trashList">
+    <div class="mybooks-empty">垃圾桶是空的。</div>
   </div>
 </div>
 
@@ -849,6 +866,10 @@ class BookRepository {
   async saveBook(book) { throw new Error('Not implemented'); }
   async loadBook(bookId) { throw new Error('Not implemented'); }
   async deleteBook(bookId) { throw new Error('Not implemented'); }
+  async trashBook(bookId) { throw new Error('Not implemented'); }
+  async restoreBook(bookId) { throw new Error('Not implemented'); }
+  async listTrashedBooks() { throw new Error('Not implemented'); }
+  async permanentlyDeleteBook(bookId) { throw new Error('Not implemented'); }
   async renameBook(bookId, newTitle) { throw new Error('Not implemented'); }
 
   async savePage(bookId, pageNumber, blocks) { throw new Error('Not implemented'); }
@@ -862,6 +883,8 @@ class BookRepository {
   async saveUserSettings(settings) { throw new Error('Not implemented'); }
 
   async countBooks() { throw new Error('Not implemented'); }
+
+  async uploadSourceFile(fileBytes, fileName) { throw new Error('Not implemented'); }
 
   async addSource(bookId, sourceType, filePath) { throw new Error('Not implemented'); }
   async listSources(bookId) { throw new Error('Not implemented'); }
@@ -894,6 +917,7 @@ class MemoryRepository extends BookRepository {
 
   async listBooks() {
     return Array.from(this._books.values())
+      .filter(b => !b.deletedAt)
       .map(b => ({
         id: b.id,
         title: b.title,
@@ -911,6 +935,7 @@ class MemoryRepository extends BookRepository {
       id: book.id,
       title: book.title,
       cover: book.cover ?? existing?.cover ?? null,
+      deletedAt: existing?.deletedAt ?? null,
       createdAt: existing?.createdAt || now,
       updatedAt: now,
     };
@@ -937,6 +962,53 @@ class MemoryRepository extends BookRepository {
         sourcePageIndex: p.sourcePageIndex ?? null,
       })),
     };
+  }
+
+  /**
+   * 軟刪除：移到垃圾桶，記錄刪除時間，不真正移除任何資料。
+   */
+  async trashBook(bookId) {
+    const book = this._books.get(bookId);
+    if (!book) throw new Error(`找不到教材 (id=${bookId})`);
+    book.deletedAt = new Date().toISOString();
+  }
+
+  /**
+   * 從垃圾桶還原，清除刪除時間，書籍恢復正常顯示。
+   */
+  async restoreBook(bookId) {
+    const book = this._books.get(bookId);
+    if (!book) throw new Error(`找不到教材 (id=${bookId})`);
+    book.deletedAt = null;
+  }
+
+  /**
+   * 列出垃圾桶裡的書（已軟刪除，不分是否過期 —— 過期清除是後端排程
+   * 的職責，前端垃圾桶介面只負責顯示「剩餘保留天數」給老師參考）。
+   */
+  async listTrashedBooks() {
+    return Array.from(this._books.values())
+      .filter(b => b.deletedAt)
+      .map(b => ({
+        id: b.id,
+        title: b.title,
+        cover: b.cover ?? null,
+        totalPages: (this._pages.get(b.id) || []).length,
+        deletedAt: b.deletedAt,
+      }))
+      .sort((a, b) => new Date(b.deletedAt) - new Date(a.deletedAt));
+  }
+
+  /**
+   * 立即永久刪除（測試用：MemoryRepository 不需要處理 Storage 檔案，
+   * 正式環境的永久刪除由 Supabase 排程的 purge_expired_trashed_books() 處理，
+   * 不是透過這個方法 —— 這個方法保留給「老師在垃圾桶裡主動選擇立即清除」
+   * 這種情境，如果之後要做這個功能）。
+   */
+  async permanentlyDeleteBook(bookId) {
+    this._books.delete(bookId);
+    this._pages.delete(bookId);
+    this._sources.delete(bookId);
   }
 
   async deleteBook(bookId) {
@@ -1070,6 +1142,17 @@ class MemoryRepository extends BookRepository {
   async countBooks() {
     return this._books.size;
   }
+
+  /**
+   * 測試用簡化實作：不需要真正的 Storage，直接把檔案轉成 data URL
+   * 回傳（這份資料會內嵌在記憶體裡的字串中，僅供離線測試使用，
+   * 不適合正式環境的大檔案）。
+   */
+  async uploadSourceFile(fileBytes, fileName) {
+    let binary = '';
+    for (let i = 0; i < fileBytes.length; i++) binary += String.fromCharCode(fileBytes[i]);
+    return `data:application/octet-stream;base64,${btoa(binary)}`;
+  }
 }
 
 /**
@@ -1099,6 +1182,7 @@ class SupabaseRepository extends BookRepository {
       .from('books')
       .select('id, title, cover, updated_at')
       .eq('user_id', userId)
+      .is('deleted_at', null) // 排除已軟刪除（在垃圾桶裡）的書
       .order('updated_at', { ascending: false });
 
     if (error) throw error;
@@ -1124,6 +1208,83 @@ class SupabaseRepository extends BookRepository {
       totalPages: countMap[b.id] || 0,
       updatedAt: b.updated_at,
     }));
+  }
+
+  /**
+   * 軟刪除：標記 deleted_at，不真正移除任何資料。書會從「我的魔法書」
+   * 列表消失（listBooks 排除已刪除的），但出現在垃圾桶列表裡，
+   * 90 天內可隨時還原；超過 90 天由 Supabase 排程的
+   * purge_expired_trashed_books() 自動永久刪除（含 Storage 裡的檔案）。
+   */
+  async trashBook(bookId) {
+    const { error } = await this.client
+      .from('books')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', bookId);
+    if (error) throw error;
+  }
+
+  /**
+   * 從垃圾桶還原：清除 deleted_at，書恢復正常顯示在「我的魔法書」。
+   */
+  async restoreBook(bookId) {
+    const { error } = await this.client
+      .from('books')
+      .update({ deleted_at: null })
+      .eq('id', bookId);
+    if (error) throw error;
+  }
+
+  /**
+   * 列出垃圾桶裡的書（已軟刪除，不論是否已過期 —— 過期清除是後端
+   * 排程的職責，垃圾桶介面只需要顯示「剩餘保留天數」給老師參考）。
+   */
+  async listTrashedBooks() {
+    const userId = await this._getUserId();
+
+    const { data: books, error } = await this.client
+      .from('books')
+      .select('id, title, cover, deleted_at')
+      .eq('user_id', userId)
+      .not('deleted_at', 'is', null)
+      .order('deleted_at', { ascending: false });
+
+    if (error) throw error;
+    if (!books || books.length === 0) return [];
+
+    const bookIds = books.map(b => b.id);
+    const { data: pageCounts, error: pageError } = await this.client
+      .from('pages')
+      .select('book_id')
+      .in('book_id', bookIds);
+
+    if (pageError) throw pageError;
+
+    const countMap = {};
+    for (const row of pageCounts || []) {
+      countMap[row.book_id] = (countMap[row.book_id] || 0) + 1;
+    }
+
+    return books.map(b => ({
+      id: b.id,
+      title: b.title,
+      cover: b.cover,
+      totalPages: countMap[b.id] || 0,
+      deletedAt: b.deleted_at,
+    }));
+  }
+
+  /**
+   * 立即永久刪除（給老師在垃圾桶裡主動選擇「立即清空」這種情境使用，
+   * 如果之後要做這個功能 —— 目前 UI 還沒有對應入口）。
+   * 正式的「超過 90 天自動清除」由 Supabase 排程的
+   * purge_expired_trashed_books() 處理，不經過這個方法。
+   * 這裡同樣只刪除資料庫紀錄，不處理 Storage 檔案 —— 如果要支援老師
+   * 主動立即清除，需要額外實作呼叫 Storage API 刪除檔案這一步。
+   */
+  async permanentlyDeleteBook(bookId) {
+    const { error } = await this.client.from('books').delete().eq('id', bookId);
+    if (error) throw error;
   }
 
   async saveBook(book) {
@@ -1437,6 +1598,27 @@ class SupabaseRepository extends BookRepository {
     if (error) throw error;
     return count || 0;
   }
+
+  /**
+   * 上傳一份教材素材（目前主要是圖片）到 Supabase Storage，回傳公開可
+   * 直接存取的網址。路徑用 user_id 開頭，搭配 RLS 政策確保只有本人
+   * 能上傳到自己的路徑下；bucket 本身是 public，任何人拿到網址都能
+   * 直接讀取（圖片素材本身不是敏感資料，公開讀取讓設定最簡單）。
+   */
+  async uploadSourceFile(fileBytes, fileName) {
+    const userId = await this._getUserId();
+    const safeFileName = fileName.replace(/[^\w.\-]/g, '_'); // 避免特殊字元造成路徑問題
+    const path = `${userId}/${Date.now()}-${safeFileName}`;
+
+    const { error: uploadError } = await this.client.storage
+      .from('source-files')
+      .upload(path, fileBytes, { contentType: undefined, upsert: false });
+
+    if (uploadError) throw uploadError;
+
+    const { data } = this.client.storage.from('source-files').getPublicUrl(path);
+    return data.publicUrl;
+  }
 }
 
 // 正式資料層：使用 SupabaseRepository。MemoryRepository 仍保留在上方，
@@ -1510,6 +1692,63 @@ function formatRelativeDate(isoString) {
   return new Date(isoString).toLocaleDateString('zh-TW');
 }
 
+const TRASH_RETENTION_DAYS = 90;
+
+/**
+ * 依刪除時間（deletedAt）算出垂圾桶裡這本書還剩幾天會被永久清除。
+ * 90 天保留期由 deletedAt 推算，不是另外存一個欄位 —— 跟後端
+ * purge_expired_trashed_books() 用的判斷邏輯（deleted_at < now() - 90 天）
+ * 是同一個基準，前端只是把它換算成「還剩幾天」方便老師理解。
+ */
+function calculateRemainingTrashDays(deletedAtIso) {
+  const deletedAt = new Date(deletedAtIso).getTime();
+  const expiresAt = deletedAt + TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const remainingMs = expiresAt - Date.now();
+  return Math.max(0, Math.ceil(remainingMs / (24 * 60 * 60 * 1000)));
+}
+
+async function renderTrashScreen() {
+  const trashedBooks = await bookRepository.listTrashedBooks();
+  const listEl = document.getElementById('trashList');
+
+  if (trashedBooks.length === 0) {
+    listEl.innerHTML = '<div class="mybooks-empty">垃圾桶是空的。</div>';
+    return;
+  }
+
+  listEl.innerHTML = trashedBooks.map(book => {
+    const remainingDays = calculateRemainingTrashDays(book.deletedAt);
+    return `
+      <div class="book-card" data-book-id="${book.id}">
+        <div class="book-icon">📖</div>
+        <div class="book-title">${escapeHtmlAttr(book.title)}</div>
+        <div class="book-meta">共 ${book.totalPages} 頁 · 剩餘 ${remainingDays} 天</div>
+        <div class="book-actions">
+          <button data-action="restore" data-book-id="${book.id}">還原</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+document.getElementById('goToTrashBtn').addEventListener('click', async () => {
+  showScreen('screen-trash');
+  await renderTrashScreen();
+});
+
+document.getElementById('backToMyBooksFromTrashBtn').addEventListener('click', async () => {
+  showScreen('screen-mybooks');
+  await renderMyBooksScreen();
+});
+
+document.getElementById('trashList').addEventListener('click', async (e) => {
+  const actionBtn = e.target.closest('button[data-action="restore"]');
+  if (!actionBtn) return;
+  const bookId = actionBtn.dataset.bookId;
+  await bookRepository.restoreBook(bookId);
+  await renderTrashScreen();
+});
+
 // 點擊書本卡片本身 → 開啟教材（進閱讀模式）；點擊卡片內的按鈕 → 各自的動作，不要連動觸發開啟
 document.getElementById('mybooksList').addEventListener('click', async (e) => {
   const actionBtn = e.target.closest('button[data-action]');
@@ -1542,9 +1781,9 @@ async function handleRenameBook(bookId) {
 
 async function handleDeleteBook(bookId) {
   const book = await bookRepository.loadBook(bookId);
-  const confirmed = confirm(`確定要刪除「${book.title}」嗎？刪除後無法復原。`);
+  const confirmed = confirm(`確定要刪除「${book.title}」嗎？\n\n刪除後會移到垃圾桶，90 天內都可以還原。`);
   if (!confirmed) return;
-  await bookRepository.deleteBook(bookId);
+  await bookRepository.trashBook(bookId);
   await renderMyBooksScreen();
 }
 
@@ -1705,9 +1944,16 @@ async function createBookFromBlocks(title, pageResults, sourceType = null, fileL
 
   let sourceId = null;
   if (sourceType) {
-    const source = await bookRepository.addSource(state.currentBookId, sourceType, fileLabel);
+    let filePathOrUrl = fileLabel;
+    if (sourceType === 'image' && fileBytes) {
+      // 圖片要真正上傳到 Supabase Storage 才能永久保存，跟 Editor 內
+      // 「＋新增來源」走的是同一套邏輯，不維護兩套規則。
+      filePathOrUrl = await bookRepository.uploadSourceFile(fileBytes, fileLabel);
+    }
+
+    const source = await bookRepository.addSource(state.currentBookId, sourceType, filePathOrUrl);
     sourceId = source.id;
-    if (fileBytes) {
+    if (fileBytes && sourceType !== 'image') {
       state.sourceFilesById = state.sourceFilesById || {};
       state.sourceFilesById[sourceId] = fileBytes;
     }
@@ -2193,6 +2439,10 @@ async function getPageImageForAi(pageData) {
   }
 
   if (source.type === 'image') {
+    // 注意：圖片現在優先透過 source.filePath（Storage 公開網址）顯示，
+    // state.sourceFilesById 已經不會再被圖片寫入。這個函式目前因為
+    // AI_RECOGNITION_ENABLED = false 而不會被呼叫到，之後恢復 AI 辨識時，
+    // 這裡需要改成用 drawImageUrlToCanvas(canvas, source.filePath) 讀取。
     const imageBytes = state.sourceFilesById?.[pageData.sourceId];
     if (!imageBytes) return null;
     const blob = new Blob([imageBytes]);
@@ -2354,9 +2604,19 @@ async function renderSourceViewer(pageData) {
   }
 
   if (source.type === 'image') {
-    const imageBytes = state.sourceFilesById?.[sourceId];
     pdfPane.style.display = '';
     const canvas = document.getElementById('editPdfCanvas');
+
+    // 優先用 source.filePath（Supabase Storage 的公開網址）載入圖片 ——
+    // 這份資料是永久的，不管重新整理過幾次、誰在哪個裝置打開都能正確顯示。
+    // 只有在這個欄位是空的情況下（理論上不該發生，保留作為防呆），
+    // 才退回嘗試讀取前端記憶體裡可能還留著的 bytes。
+    if (source.filePath) {
+      await drawImageUrlToCanvas(canvas, source.filePath);
+      return;
+    }
+
+    const imageBytes = state.sourceFilesById?.[sourceId];
     if (imageBytes) {
       const blob = new Blob([imageBytes]);
       const bitmap = await createImageBitmap(blob);
@@ -2364,7 +2624,7 @@ async function renderSourceViewer(pageData) {
       canvas.height = bitmap.height;
       canvas.getContext('2d').drawImage(bitmap, 0, 0);
     } else {
-      drawSourcePlaceholder(canvas, '🖼', source.filePath || '圖片', '原始圖片暫時無法顯示');
+      drawSourcePlaceholder(canvas, '🖼', '圖片', '原始圖片暫時無法顯示');
     }
     return;
   }
@@ -2404,6 +2664,28 @@ function drawSourcePlaceholder(canvas, iconLabel, fileName, note) {
   ctx.fillStyle = '#999';
   ctx.font = '12px sans-serif';
   ctx.fillText(note, canvas.width / 2, 150);
+}
+
+/**
+ * 從一個圖片網址（Supabase Storage 的公開網址）載入圖片並畫到 canvas 上。
+ * 失敗時（網路問題、網址失效等）顯示一個提示卡，不讓整個畫面卡住或報錯。
+ */
+function drawImageUrlToCanvas(canvas, url) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext('2d').drawImage(img, 0, 0);
+      resolve();
+    };
+    img.onerror = () => {
+      drawSourcePlaceholder(canvas, '🖼', '圖片', '圖片載入失敗，請檢查網路連線');
+      resolve();
+    };
+    img.src = url;
+  });
 }
 
 /**
@@ -2847,11 +3129,20 @@ async function handleAddSource(sourceType) {
 async function insertNewSource(sourceType, fileLabel, pageResults, fileBytes) {
   await savePageBeforeLeaving(state.currentEditPage);
 
-  const source = await bookRepository.addSource(state.currentBookId, sourceType, fileLabel);
+  let filePathOrUrl = fileLabel;
+  if (sourceType === 'image' && fileBytes) {
+    // 圖片要真正上傳到 Supabase Storage 才能永久保存 —— 之前只存在
+    // 前端記憶體（state.sourceFilesById），重新整理頁面就會遺失。
+    // 上傳成功後拿到的公開網址，存進 sources.file_path，這樣不管
+    // 誰在哪個裝置、哪次瀏覽器 session 打開這本教材，圖片都能正確顯示。
+    filePathOrUrl = await bookRepository.uploadSourceFile(fileBytes, fileLabel);
+  }
 
-  // 原始檔案位元組，先暫存在前端記憶體供左側 Viewer 渲染使用
-  // （正式的檔案儲存／讀取屬於 Storage 的職責，這次先聚焦在左右同步的架構）。
-  if (fileBytes) {
+  const source = await bookRepository.addSource(state.currentBookId, sourceType, filePathOrUrl);
+
+  // PDF 等尚未接上 Storage 的格式，仍先暫存在前端記憶體（既有限制，
+  // 重新整理會遺失），圖片現在已經有永久網址，不需要再依賴這份暫存。
+  if (fileBytes && sourceType !== 'image') {
     state.sourceFilesById = state.sourceFilesById || {};
     state.sourceFilesById[source.id] = fileBytes;
   }
@@ -2999,9 +3290,15 @@ async function renderReadSourceViewer(pageData) {
   }
 
   if (source.type === 'image') {
-    const imageBytes = state.sourceFilesById?.[sourceId];
     pdfPane.style.display = '';
     const canvas = document.getElementById('readPdfCanvas');
+
+    if (source.filePath) {
+      await drawImageUrlToCanvas(canvas, source.filePath);
+      return;
+    }
+
+    const imageBytes = state.sourceFilesById?.[sourceId];
     if (imageBytes) {
       const blob = new Blob([imageBytes]);
       const bitmap = await createImageBitmap(blob);
@@ -3009,7 +3306,7 @@ async function renderReadSourceViewer(pageData) {
       canvas.height = bitmap.height;
       canvas.getContext('2d').drawImage(bitmap, 0, 0);
     } else {
-      drawSourcePlaceholder(canvas, '🖼', source.filePath || '圖片', '原始圖片暫時無法顯示');
+      drawSourcePlaceholder(canvas, '🖼', '圖片', '原始圖片暫時無法顯示');
     }
     return;
   }
