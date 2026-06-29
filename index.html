@@ -1447,7 +1447,12 @@ const bookRepository = new SupabaseRepository(supabaseClient);
  * 會員教材數量限制（對應 Feature Design：免費會員 3 本／基本會員 20 本）。
  * MVP 先固定視為免費會員，之後接會員系統時，這個值改成讀取真實會員等級。
  */
-const MAX_BOOKS_FOR_CURRENT_PLAN = 3;
+/**
+ * 教材數量上限。目前還沒有真正的會員方案系統（沒有資料庫欄位記錄
+ * 「這個帳號屬於哪個方案」），這個常數對所有登入帳號一視同仁套用。
+ * 之後做會員方案時，這裡要改成依帳號的方案等級動態決定，不再是固定值。
+ */
+const MAX_BOOKS_FOR_CURRENT_PLAN = 40;
 
 
 
