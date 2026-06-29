@@ -1000,10 +1000,11 @@ class MemoryRepository extends BookRepository {
   }
 
   /**
-   * 立即永久刪除（測試用：MemoryRepository 不需要處理 Storage 檔案，
-   * 正式環境的永久刪除由 Supabase 排程的 purge_expired_trashed_books() 處理，
-   * 不是透過這個方法 —— 這個方法保留給「老師在垃圾桶裡主動選擇立即清除」
-   * 這種情境，如果之後要做這個功能）。
+   * 立即永久刪除（測試用：MemoryRepository 不需要處理真正的 Storage 檔案，
+   * 直接清除記憶體裡的資料即可）。老師在垃圾桶裡可以主動選擇立即清除，
+   * 不必等待 90 天；正式環境的「超過 90 天自動清除」則是由 Supabase
+   * 排程的 purge_expired_trashed_books() 在後端處理，跟這個方法是兩條
+   * 觸發路徑，但都是真正永久刪除、不可復原。
    */
   async permanentlyDeleteBook(bookId) {
     this._books.delete(bookId);
@@ -1275,14 +1276,42 @@ class SupabaseRepository extends BookRepository {
   }
 
   /**
-   * 立即永久刪除（給老師在垃圾桶裡主動選擇「立即清空」這種情境使用，
-   * 如果之後要做這個功能 —— 目前 UI 還沒有對應入口）。
-   * 正式的「超過 90 天自動清除」由 Supabase 排程的
-   * purge_expired_trashed_books() 處理，不經過這個方法。
-   * 這裡同樣只刪除資料庫紀錄，不處理 Storage 檔案 —— 如果要支援老師
-   * 主動立即清除，需要額外實作呼叫 Storage API 刪除檔案這一步。
+  /**
+   * 立即永久刪除：老師在垃圾桶裡選擇「立即清空」，不必等待 90 天。
+   * 先刪除這本書底下所有來源對應的 Storage 檔案（用 storage.from().remove()，
+   * 這是官方建議的正確方式 —— 直接用 SQL 刪除 storage.objects 的資料列
+   * 只會刪除 metadata，不會真正釋放底層儲存空間，留下孤兒檔案），
+   * 確認檔案刪除完成後，再刪除 books（cascade 連帶刪除 pages／sources）。
+   *
+   * 這裡用的是登入使用者的 session（不是 service_role_key），權限依賴
+   * Storage 的 RLS 政策「用戶只能刪除自己的檔案」—— 老師只能刪除
+   * 自己上傳的檔案，這正是這個情境需要的範圍。
    */
   async permanentlyDeleteBook(bookId) {
+    const { data: sources, error: sourcesError } = await this.client
+      .from('sources')
+      .select('file_path')
+      .eq('book_id', bookId)
+      .not('file_path', 'is', null);
+
+    if (sourcesError) throw sourcesError;
+
+    const storagePaths = (sources || [])
+      .map(s => {
+        const match = s.file_path?.match(/\/source-files\/(.+)$/);
+        return match ? match[1] : null;
+      })
+      .filter(Boolean);
+
+    if (storagePaths.length > 0) {
+      const { error: removeError } = await this.client.storage
+        .from('source-files')
+        .remove(storagePaths);
+      // 刪除檔案失敗不阻擋刪除資料庫紀錄的流程（例如檔案早已不存在），
+      // 只記錄警告，避免老師卡在「想刪除卻刪不掉」的情況。
+      if (removeError) console.warn('永久刪除：部分 Storage 檔案刪除失敗', removeError);
+    }
+
     const { error } = await this.client.from('books').delete().eq('id', bookId);
     if (error) throw error;
   }
@@ -1725,6 +1754,7 @@ async function renderTrashScreen() {
         <div class="book-meta">共 ${book.totalPages} 頁 · 剩餘 ${remainingDays} 天</div>
         <div class="book-actions">
           <button data-action="restore" data-book-id="${book.id}">還原</button>
+          <button data-action="permanent-delete" data-book-id="${book.id}" class="danger">立即永久刪除</button>
         </div>
       </div>
     `;
@@ -1742,11 +1772,25 @@ document.getElementById('backToMyBooksFromTrashBtn').addEventListener('click', a
 });
 
 document.getElementById('trashList').addEventListener('click', async (e) => {
-  const actionBtn = e.target.closest('button[data-action="restore"]');
+  const actionBtn = e.target.closest('button[data-action]');
   if (!actionBtn) return;
   const bookId = actionBtn.dataset.bookId;
-  await bookRepository.restoreBook(bookId);
-  await renderTrashScreen();
+
+  if (actionBtn.dataset.action === 'restore') {
+    await bookRepository.restoreBook(bookId);
+    await renderTrashScreen();
+    return;
+  }
+
+  if (actionBtn.dataset.action === 'permanent-delete') {
+    const book = await bookRepository.loadBook(bookId);
+    const confirmed = confirm(
+      `確定要立即永久刪除「${book.title}」嗎？\n\n這個動作無法復原，教材內容、圖片都會被永久清除，不會再出現在垃圾桶裡。`
+    );
+    if (!confirmed) return;
+    await bookRepository.permanentlyDeleteBook(bookId);
+    await renderTrashScreen();
+  }
 });
 
 // 點擊書本卡片本身 → 開啟教材（進閱讀模式）；點擊卡片內的按鈕 → 各自的動作，不要連動觸發開啟
