@@ -884,7 +884,7 @@ class BookRepository {
 
   async countBooks() { throw new Error('Not implemented'); }
 
-  async uploadSourceFile(fileBytes, fileName) { throw new Error('Not implemented'); }
+  async uploadSourceFile(fileBytes, fileName, contentType) { throw new Error('Not implemented'); }
 
   async addSource(bookId, sourceType, filePath) { throw new Error('Not implemented'); }
   async listSources(bookId) { throw new Error('Not implemented'); }
@@ -1149,10 +1149,10 @@ class MemoryRepository extends BookRepository {
    * 回傳（這份資料會內嵌在記憶體裡的字串中，僅供離線測試使用，
    * 不適合正式環境的大檔案）。
    */
-  async uploadSourceFile(fileBytes, fileName) {
+  async uploadSourceFile(fileBytes, fileName, contentType) {
     let binary = '';
     for (let i = 0; i < fileBytes.length; i++) binary += String.fromCharCode(fileBytes[i]);
-    return `data:application/octet-stream;base64,${btoa(binary)}`;
+    return `data:${contentType || 'application/octet-stream'};base64,${btoa(binary)}`;
   }
 }
 
@@ -1634,20 +1634,43 @@ class SupabaseRepository extends BookRepository {
    * 能上傳到自己的路徑下；bucket 本身是 public，任何人拿到網址都能
    * 直接讀取（圖片素材本身不是敏感資料，公開讀取讓設定最簡單）。
    */
-  async uploadSourceFile(fileBytes, fileName) {
+  async uploadSourceFile(fileBytes, fileName, contentType) {
     const userId = await this._getUserId();
     const safeFileName = fileName.replace(/[^\w.\-]/g, '_'); // 避免特殊字元造成路徑問題
     const path = `${userId}/${Date.now()}-${safeFileName}`;
 
+    // 必須明確指定 contentType —— 傳 undefined 會讓 Storage API 收到不正確
+    // 的 Content-Type header，直接以 400 Invalid Content-Type header 拒絕
+    // 整個上傳請求。沒有外部傳入時，依檔名副檔名猜測一個合理的預設值，
+    // 確保這裡永遠不會是 undefined。
+    const finalContentType = contentType || guessContentTypeFromFileName(fileName);
+
     const { error: uploadError } = await this.client.storage
       .from('source-files')
-      .upload(path, fileBytes, { contentType: undefined, upsert: false });
+      .upload(path, fileBytes, { contentType: finalContentType, upsert: false });
 
     if (uploadError) throw uploadError;
 
     const { data } = this.client.storage.from('source-files').getPublicUrl(path);
     return data.publicUrl;
   }
+}
+
+/**
+ * 依檔名副檔名猜測一個合理的 MIME type，用於 uploadSourceFile 沒有
+ * 拿到外部傳入的 contentType 時的後備方案。
+ */
+function guessContentTypeFromFileName(fileName) {
+  const ext = fileName.split('.').pop()?.toLowerCase();
+  const map = {
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    svg: 'image/svg+xml',
+  };
+  return map[ext] || 'application/octet-stream';
 }
 
 // 正式資料層：使用 SupabaseRepository。MemoryRepository 仍保留在上方，
@@ -1949,7 +1972,7 @@ document.getElementById('genericAddMaterialBtn').addEventListener('click', async
     // 體驗跟「直接開始編輯」一致，文字完全由老師自己輸入或貼上。
     const fileBytes = new Uint8Array(await genericSelectedFile.arrayBuffer());
     const blocks = createManualBlankBlocks(1);
-    await createBookFromBlocks(title, [{ blocks, buildState: 'editing' }], 'image', genericSelectedFile.name, fileBytes);
+    await createBookFromBlocks(title, [{ blocks, buildState: 'editing' }], 'image', genericSelectedFile.name, fileBytes, genericSelectedFile.type);
     return;
   }
 
@@ -1980,7 +2003,7 @@ document.getElementById('urlAddMaterialBtn').addEventListener('click', async () 
  * 會先呼叫 addSource() 記錄下來；若是「直接開始編輯」這類無來源情境，
  * 傳 null 即可，頁面的 sourceId 會是 null。
  */
-async function createBookFromBlocks(title, pageResults, sourceType = null, fileLabel = null, fileBytes = null) {
+async function createBookFromBlocks(title, pageResults, sourceType = null, fileLabel = null, fileBytes = null, contentType = null) {
   state.materialName = title;
 
   const savedBook = await bookRepository.saveBook({ title: state.materialName });
@@ -1992,7 +2015,7 @@ async function createBookFromBlocks(title, pageResults, sourceType = null, fileL
     if (sourceType === 'image' && fileBytes) {
       // 圖片要真正上傳到 Supabase Storage 才能永久保存，跟 Editor 內
       // 「＋新增來源」走的是同一套邏輯，不維護兩套規則。
-      filePathOrUrl = await bookRepository.uploadSourceFile(fileBytes, fileLabel);
+      filePathOrUrl = await bookRepository.uploadSourceFile(fileBytes, fileLabel, contentType);
     }
 
     const source = await bookRepository.addSource(state.currentBookId, sourceType, filePathOrUrl);
@@ -3153,7 +3176,7 @@ async function handleAddSource(sourceType) {
       if (!file) return;
       const fileBytes = new Uint8Array(await file.arrayBuffer());
       const blocks = createManualBlankBlocks(1);
-      await insertNewSource('image', file.name, [{ blocks, buildState: 'editing' }], fileBytes);
+      await insertNewSource('image', file.name, [{ blocks, buildState: 'editing' }], fileBytes, file.type);
     };
     input.click();
     return;
@@ -3186,7 +3209,7 @@ async function handleAddSource(sourceType) {
  * Repository（教材內容本身），buildState 是前端流程控制欄位，
  * loadBook() 不會回傳它，這裡要在重新載入後手動補回去。
  */
-async function insertNewSource(sourceType, fileLabel, pageResults, fileBytes) {
+async function insertNewSource(sourceType, fileLabel, pageResults, fileBytes, contentType) {
   await savePageBeforeLeaving(state.currentEditPage);
 
   let filePathOrUrl = fileLabel;
@@ -3195,7 +3218,7 @@ async function insertNewSource(sourceType, fileLabel, pageResults, fileBytes) {
     // 前端記憶體（state.sourceFilesById），重新整理頁面就會遺失。
     // 上傳成功後拿到的公開網址，存進 sources.file_path，這樣不管
     // 誰在哪個裝置、哪次瀏覽器 session 打開這本教材，圖片都能正確顯示。
-    filePathOrUrl = await bookRepository.uploadSourceFile(fileBytes, fileLabel);
+    filePathOrUrl = await bookRepository.uploadSourceFile(fileBytes, fileLabel, contentType);
   }
 
   const source = await bookRepository.addSource(state.currentBookId, sourceType, filePathOrUrl);
