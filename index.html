@@ -2653,9 +2653,15 @@ async function renderSourceViewer(pageData) {
 
     // 優先用 source.filePath（Supabase Storage 的公開網址）載入圖片 ——
     // 這份資料是永久的，不管重新整理過幾次、誰在哪個裝置打開都能正確顯示。
-    // 只有在這個欄位是空的情況下（理論上不該發生，保留作為防呆），
-    // 才退回嘗試讀取前端記憶體裡可能還留著的 bytes。
-    if (source.filePath) {
+    //
+    // 用 isStorageUrl() 而不是單純檢查 truthy：接上 Supabase Storage
+    // 之前建立的舊教材，sources.file_path 存的是當時的純檔名字串
+    // （例如「螢幕擷取畫面.png」），不是真正的網址 —— 直接拿這種字串
+    // 當 <img> 的 src，瀏覽器會把它解析成站內相對路徑去請求，
+    // 必定得到 404。這裡先判斷是不是真的網址，不是的話直接視為
+    // 「沒有可用的圖片網址」，走下面的記憶體/佔位圖分支，
+    // 不對著注定失敗的字串發送請求。
+    if (isStorageUrl(source.filePath)) {
       await drawImageUrlToCanvas(canvas, source.filePath);
       return;
     }
@@ -2668,7 +2674,8 @@ async function renderSourceViewer(pageData) {
       canvas.height = bitmap.height;
       canvas.getContext('2d').drawImage(bitmap, 0, 0);
     } else {
-      drawSourcePlaceholder(canvas, '🖼', '圖片', '原始圖片暫時無法顯示');
+      drawSourcePlaceholder(canvas, '🖼', '圖片',
+        '這是舊版本建立的教材，圖片未永久保存，請刪除後用最新版本重新建立');
     }
     return;
   }
@@ -2708,6 +2715,15 @@ function drawSourcePlaceholder(canvas, iconLabel, fileName, note) {
   ctx.fillStyle = '#999';
   ctx.font = '12px sans-serif';
   ctx.fillText(note, canvas.width / 2, 150);
+}
+
+/**
+ * 判斷一個字串是不是真正的網址（http:// 或 https:// 開頭），用來區分
+ * 接上 Supabase Storage 之後存的真實公開網址，跟接上之前的舊資料
+ * （sources.file_path 當時存的是純檔名字串，不是網址）。
+ */
+function isStorageUrl(filePath) {
+  return typeof filePath === 'string' && /^https?:\/\//.test(filePath);
 }
 
 /**
@@ -3337,7 +3353,7 @@ async function renderReadSourceViewer(pageData) {
     pdfPane.style.display = '';
     const canvas = document.getElementById('readPdfCanvas');
 
-    if (source.filePath) {
+    if (isStorageUrl(source.filePath)) {
       await drawImageUrlToCanvas(canvas, source.filePath);
       return;
     }
@@ -3350,7 +3366,8 @@ async function renderReadSourceViewer(pageData) {
       canvas.height = bitmap.height;
       canvas.getContext('2d').drawImage(bitmap, 0, 0);
     } else {
-      drawSourcePlaceholder(canvas, '🖼', '圖片', '原始圖片暫時無法顯示');
+      drawSourcePlaceholder(canvas, '🖼', '圖片',
+        '這是舊版本建立的教材，圖片未永久保存，請刪除後用最新版本重新建立');
     }
     return;
   }
